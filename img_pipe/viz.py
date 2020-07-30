@@ -1304,7 +1304,7 @@ class ElectrodePicker(QMainWindow):
             self.update_RAS_label()
 
     def update_RAS_label(self):
-        self.RAS_label.setText('RAS=({:.3f}, {:.3f}, {:.3f}'.format(
+        self.RAS_label.setText('RAS=({:.3f}, {:.3f}, {:.3f})'.format(
             *self.cursors_to_RAS()))
 
     def cursors_to_RAS(self):

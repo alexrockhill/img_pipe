@@ -1117,8 +1117,10 @@ class ElectrodePicker(QMainWindow):
 
     def update_ct_scale(self):
         """Update CT slider value."""
-        for ct_img in self.images['ct']:
-            ct_img.set_clim([CT_MIN_VAL, self.ct_slider.value()])
+        for axis in range(3):
+            for axis2 in range(2):
+                self.images['ct'][(axis2, axis)].set_clim(
+                    [CT_MIN_VAL, self.ct_slider.value()])
         self.plt.fig.canvas.draw()
 
     def update_radius(self):

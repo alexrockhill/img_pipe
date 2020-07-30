@@ -1130,12 +1130,11 @@ class ElectrodePicker(QMainWindow):
         for i, name in enumerate(self.elec_names):
             if name in self.elec_matrix:
                 coords = self.elec_matrix[name]
-                self.elec_data[coords[0] - self.elec_radius:
-                               coords[0] + self.elec_radius + 1,
-                               coords[1] - self.elec_radius:
-                               coords[1] + self.elec_radius + 1,
-                               coords[2] - self.elec_radius:
-                               coords[2] + self.elec_radius + 1] = i
+                sx, sy, sz = [np.round(coord).astype(int) for coord in coords]
+                self.elec_data[
+                    sx - self.elec_radius: sx + self.elec_radius + 1,
+                    sy - self.elec_radius: sy + self.elec_radius + 1,
+                    sz - self.elec_radius: sz + self.elec_radius + 1] = i
         self.update_elec_images(draw=True)
 
     def get_axis_selected(self, x, y, return_pos=False):

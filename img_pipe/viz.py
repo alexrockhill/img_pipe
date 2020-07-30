@@ -1171,6 +1171,7 @@ class ElectrodePicker(QMainWindow):
         self.move_cursor_to(2, x=R, y=A)
         self.update_images(draw=False)
         self.zoom(0)  # doesn't actually zoom just resets view to center
+        self.update_RAS_label()
 
     def move_cursor_to(self, axis, x=None, y=None):
         for axis2 in range(2):

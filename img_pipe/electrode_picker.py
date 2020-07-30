@@ -1,17 +1,20 @@
-#!/usr/bin/env python
+"""Pick electrodes using PyQt GUI."""
+# Authors: Liberty Hamilton
+#          Alex Rockhill <aprockhill@mailbox.org>
 #
-# Written 2017 by Liberty Hamilton
-#
+# License: BSD (3-clause)
 
 import matplotlib
-matplotlib.use('Qt4Agg') 
+matplotlib.use('Qt4Agg')
 matplotlib.rcParams['toolbar'] = 'None'
+
 from pyface.qt import QtGui, QtCore
 from matplotlib import pyplot as plt
-plt.rcParams['keymap.save'] = '' # Unbind 's' key saving
+plt.rcParams['keymap.save'] = ''  # Unbind 's' key saving
 plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Helvetica','Verdana','Bitstream Vera Sans','sans-serif']
-#print(plt.get_backend())
+plt.rcParams['font.sans-serif'] = ['Helvetica', 'Verdana',
+                                   'Bitstream Vera Sans', 'sans-serif']
+# print(plt.get_backend())
 
 from matplotlib import cm
 import matplotlib.colors as mcolors
@@ -32,37 +35,36 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 warnings.filterwarnings('ignore')
 
+
 class inputdialog(QWidget):
-    def __init__(self, parent = None):
+    def __init__(self, parent=None):
         super(inputdialog, self).__init__(parent)
         self.showDialog()
 
     def showDialog(self):
-        text, ok = QInputDialog.getText(self, 'Input dialog', 'Enter device name:')
-        
+        text, ok = QInputDialog.getText(self, 'Input dialog',
+                                        'Enter device name:')
+
         if ok:
             self.result = str(text)
 
-class electrode_picker:
-    '''
-    electrode_picker.py defines a class [electrode_picker] that allows the 
-    user to take a co-registered CT and MRI scan and identify electrodes
-    based on sagittal, coronal, and axial views of the scans as well as
-    a maximum intensity projection of the CT scan. Inputs are the 
-    subject directory and the hemisphere of implantation.  If stereo-EEG,
-    choose 'stereo' as the hemisphere
 
-    Usage: 
-        python electrode_picker.py '/usr/local/freesurfer/subjects/S1' 'rh'
+class electrode_picker:
+    """Identify electrode locations from a CT coregisted to an MRI.
+
+    Identify electrodes based on sagittal, coronal, and axial views
+    of the scans as well as a maximum intensity projection of the CT scan.
+    Inputs are the subject directory and the hemisphere of implantation.
+
+    Usage:
+        python electrode_picker.py
 
     This assumes that you have processed your data using freesurfer's pipeline
-    and that you have a coregistered MRI and CT in subj_dir (e.g. '/usr/local/freesurfer/subjects/S1')
-    as [subj_dir]/mri/brain.mgz and [subj_dir]/CT/rCT.nii
+    and that you have a coregistered MRI and CT in subj_dir
+    (e.g. '/usr/local/freesurfer/subjects/S1') as [subj_dir]/mri/brain.mgz and [subj_dir]/CT/rCT.nii
 
-    Written by Liberty Hamilton, 2017
-
-    '''
-    def __init__(self, subj_dir, hem):
+    """
+    def __init__(self):
         '''
         Initialize the electrode picker with the user-defined MRI and co-registered
         CT scan in [subj_dir].  Images will be displayed using orientation information 
@@ -333,8 +335,8 @@ class electrode_picker:
         #cid4 = self.fig.canvas.mpl_connect('key_release_event', self.on_key)
 
         slider_ax = plt.axes([self.ax[0].get_position().bounds[0]+0.06, 
-        					  self.ax[0].get_position().bounds[1]+0.42, 
-        					  self.ax[0].get_position().bounds[2]-0.1, 0.02])
+                              self.ax[0].get_position().bounds[1]+0.42, 
+                              self.ax[0].get_position().bounds[2]-0.1, 0.02])
         self.mri_slider = Slider(slider_ax, 'MRI max', img_data.min(), img_data.max(), facecolor=[0.3, 0.3, 0.3])
         self.mri_slider.on_changed(self.update_mri)
 

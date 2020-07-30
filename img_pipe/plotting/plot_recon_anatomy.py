@@ -1,4 +1,4 @@
-#plot_recon_anatomy.py
+# plot_recon_anatomy.py
 #
 # Liberty Hamilton 2016
 #
@@ -10,9 +10,8 @@ from .SupplementalFiles import FS_colorLUT as FS_colorLUT
 import numpy as np
 import os
 
-fs_dir = os.environ['SUBJECTS_DIR']
 
-def plot_recon_anatomy(patient):
+def plot_recon_anatomy(hemi):
 	subj = patient.subj
 	hem = patient.hem
 	a = scipy.io.loadmat('%s/%s/Meshes/%s_pial_trivert.mat'%(fs_dir, subj, hem))

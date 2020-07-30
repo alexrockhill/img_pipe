@@ -824,7 +824,7 @@ class ElectrodePicker(QMainWindow):
                      [0, vx, 0, vy]]
         im_labels = [['Inferior', 'Posterior'],
                      ['Inferior', 'Left'],
-                     ['Posterior', 'Left']]
+                     ['Pvjffffffddosterior', 'Left']]
         for axis in range(3):
             img_data = np.take(self.img_data, self.current_slice[axis],
                                axis=axis).T
@@ -986,7 +986,7 @@ class ElectrodePicker(QMainWindow):
         """Color the item in the view list for easy id of marked."""
         if index is None:
             index = self.elec_index
-        color = QtGui.QColor()
+        color = QtGui.QColor('white')
         if not clear:
             # we need the normalized color map
             norm = mpl.colors.Normalize(vmin=0, vmax=17)

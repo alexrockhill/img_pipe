@@ -824,7 +824,7 @@ class ElectrodePicker(QMainWindow):
                      [0, vx, 0, vy]]
         im_labels = [['Inferior', 'Posterior'],
                      ['Inferior', 'Left'],
-                     ['Pvjffffffddosterior', 'Left']]
+                     ['Posterior', 'Left']]
         for axis in range(3):
             img_data = np.take(self.img_data, self.current_slice[axis],
                                axis=axis).T
@@ -1135,8 +1135,7 @@ class ElectrodePicker(QMainWindow):
                                coords[1] - self.elec_radius:
                                coords[1] + self.elec_radius + 1,
                                coords[2] - self.elec_radius:
-                               coords[2] + self.elec_radius + 1] = \
-                    ELECTRODE_COLORS(i)
+                               coords[2] + self.elec_radius + 1] = i
         self.update_elec_images(draw=True)
 
     def get_axis_selected(self, x, y, return_pos=False):

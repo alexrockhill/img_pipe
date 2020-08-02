@@ -3,9 +3,12 @@
 #
 # License: BSD (3-clause)
 
-VOXEL_SIZES = (256, 256, 256)
+import numpy as np
+
+VOXEL_SIZES = np.array([256, 256, 256])
 ZOOM_STEP_SIZE = 5
 CT_MIN_VAL = 1000
+MAX_N_GROUPS = 17
 
 SUBCORTICAL_INDICES = [4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 26,
                        28, 43, 44, 49, 50, 51, 52, 53, 54, 58, 60]

@@ -34,7 +34,7 @@ import nibabel as nib
 import scipy
 from scipy.ndimage import zoom, binary_closing
 
-from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL,
+from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
                              CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE)
 from img_pipe.utils import (check_fs_vars, check_file, check_hemi, get_surf,
                             get_azimuth, get_fs_labels, get_fs_colors)
@@ -51,16 +51,18 @@ from PyQt5.QtCore import pyqtSlot  # noqa
 from PyQt5.QtWidgets import (QApplication, QMainWindow,  # noqa
                              QVBoxLayout, QHBoxLayout, QLabel,  # noqa
                              QInputDialog, QMessageBox, QWidget,  # noqa
-                             QListView, QSlider, QPushButton)  # noqa
+                             QListView, QSlider, QPushButton,
+                             QComboBox)  # noqa
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg  # noqa
 
 import mayavi  # noqa
 from mayavi import mlab  # noqa
 
-ELECTRODE_COLORS = \
-    mcolors.LinearSegmentedColormap.from_list(
-        'elec_colors', np.vstack((cm.Set1(np.linspace(0., 1, 9)),
-                                  cm.Set2(np.linspace(0., 1, 8)))))
+ELECTRODE_COLORS = mcolors.LinearSegmentedColormap.from_list(
+    'elec_colors', np.vstack(
+        (cm.Set1(np.linspace(0., 1, MAX_N_GROUPS // 2 + 1 - MAX_N_GROUPS % 2)),
+         cm.Set2(np.linspace(0., 1, MAX_N_GROUPS // 2)))))
+NORM = mpl.colors.Normalize(vmin=0, vmax=MAX_N_GROUPS)
 
 
 def _ctmr_gauss_plot(tri, vert, color=(0.8, 0.8, 0.8), elecs=None,
@@ -553,7 +555,21 @@ def plot_recon_anatomy(hemi='both', verbose=True):
     return mesh, mlab
 
 
+class ComboBox(QComboBox):
+    """Fixes on changed bug.
+
+    When a custom group is chosen, this is linked to the first item (auto)
+    color, this puts it's color back to the auto suggestion
+    """
+    clicked = QtCore.pyqtSignal()
+
+    def showPopup(self):
+        self.clicked.emit()
+        super(ComboBox, self).showPopup()
+
+
 class SlicePlots(FigureCanvasQTAgg):
+    """Initializes figure in pyqt for slice plots."""
 
     def __init__(self, parent=None, width=16, height=10, dpi=300):
         self.fig, self.axes = plt.subplots(2, 3, figsize=(width, height),
@@ -639,7 +655,6 @@ class ElectrodePicker(QMainWindow):
         self.load_electrode_names()
 
         self.elec_radius = 1
-        self.elec_data = np.empty(self.img_data.shape) + np.nan
         self.load_electrodes()  # add already marked electrodes if they exist
 
         self.pial_surf_on = True  # Whether pial surface is visible or not
@@ -673,8 +688,10 @@ class ElectrodePicker(QMainWindow):
         self.setCentralWidget(central_widget)
 
         name = self.get_current_elec()
+        if name:
+            self.set_auto_color()
         if name in self.elec_matrix:
-            self.move_cursors_to_pos(*self.elec_matrix[name])
+            self.move_cursors_to_pos()
 
     def load_image_data(self):
         # Specified resolution to which to resample both the MRI and CT
@@ -692,7 +709,7 @@ class ElectrodePicker(QMainWindow):
         # voxel_sizes = nib.affines.voxel_sizes(img.affine)
         nx, ny, nz = np.array(self.img_data.shape, dtype='float')
         # reample MRI
-        if img.shape != VOXEL_SIZES:
+        if nx != vx or ny != vx or nz != vz:
             print(f'Resampling MRI from {nx} {ny} {nz} to {vx} {vy} {vz}')
             self.img_data = zoom(self.img_data, (vx / nx, vy / ny, vz / nz))
 
@@ -707,7 +724,7 @@ class ElectrodePicker(QMainWindow):
                                                           ct_codes)
         cx, cy, cz = np.array(self.ct_data.shape, dtype='float')
         # resample CT
-        if ct.shape != VOXEL_SIZES:
+        if cx != vx or cy != vx or cz != vz:
             print(f'Resampling CT from {cx} {cy} {cz} to {vx} {vy} {vz}')
             self.ct_data = zoom(self.ct_data, (vx / cx, vy / cy, vz / cz))
         # Threshold the CT so only bright objects (electrodes) are visible
@@ -745,7 +762,7 @@ class ElectrodePicker(QMainWindow):
         button_hbox.addWidget(new_button)
         new_button.released.connect(self.new_elec)
 
-        button_hbox.addStretch(2)
+        button_hbox.addStretch(3)
 
         prev_button = QPushButton('Prev')
         button_hbox.addWidget(prev_button)
@@ -771,6 +788,26 @@ class ElectrodePicker(QMainWindow):
         remove_button = QPushButton('Remove')
         button_hbox.addWidget(remove_button)
         remove_button.released.connect(self.remove_elec)
+
+        self.group_selector = ComboBox()
+        self.group_selector.addItem('auto')
+        group_model = self.group_selector.model()
+
+        for i in range(MAX_N_GROUPS):
+            self.group_selector.addItem(' ')
+            rgba = cm.ScalarMappable(
+                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(i)
+            color = QtGui.QColor()
+            color.setRgb(*[c * 255 for c in rgba])
+            brush = QtGui.QBrush(color)
+            brush.setStyle(QtCore.Qt.SolidPattern)
+            group_model.setData(group_model.index(i + 1, 0),
+                                brush, QtCore.Qt.BackgroundRole)
+        self.group_selector.currentIndexChanged.connect(
+            self.update_group_color)
+        self.group_selector.clicked.connect(self.set_auto_color)
+        button_hbox.addWidget(self.group_selector)
+
         return button_hbox
 
     def get_slider_bar(self):
@@ -803,7 +840,7 @@ class ElectrodePicker(QMainWindow):
         radius_label.setAlignment(QtCore.Qt.AlignCenter)
         slider_title_hbox.addWidget(radius_label)
         self.radius_slider = QSlider(QtCore.Qt.Horizontal)
-        self.radius_slider.setMinimum(1)
+        self.radius_slider.setMinimum(0)
         self.radius_slider.setMaximum(5)
         self.radius_slider.setValue(2)
         self.radius_slider.valueChanged.connect(self.update_radius)
@@ -850,7 +887,7 @@ class ElectrodePicker(QMainWindow):
                 self.images['elec'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].imshow(
                     elec_data, cmap=ELECTRODE_COLORS, aspect='auto',
-                    alpha=1, vmin=0, vmax=17)
+                    alpha=1, vmin=0, vmax=MAX_N_GROUPS)
                 self.images['cursor'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].plot(
                     (self.current_slice[1], self.current_slice[1]),
@@ -883,18 +920,15 @@ class ElectrodePicker(QMainWindow):
 
     def set_elec_names(self):
         self.elec_list_model = QtGui.QStandardItemModel(self.elec_list)
-        if not self.elec_names:
-            return
-
         for name in self.elec_names:
             self.elec_list_model.appendRow(QtGui.QStandardItem(name))
-
         for name in self.elec_matrix:
-            self.color_list_item(self.elec_names.index(name))
+            self.color_list_item(name=name)
         self.elec_list.setModel(self.elec_list_model)
         self.elec_list.clicked.connect(self.change_elec)
-        self.elec_list.setCurrentIndex(
-            self.elec_list_model.index(self.elec_index, 0))
+        if self.elec_names or self.elec_matrix:
+            self.elec_list.setCurrentIndex(
+                self.elec_list_model.index(self.elec_index, 0))
         self.elec_list.keyPressEvent = self.keyPressEvent
 
     def change_elec(self, index):
@@ -903,13 +937,28 @@ class ElectrodePicker(QMainWindow):
         name = self.get_current_elec()
         self.elec_label.setText(name)
         if name in self.elec_matrix:
-            self.move_cursors_to_pos(*self.elec_matrix[name])
+            self.move_cursors_to_pos()
+
+    def set_auto_color(self):
+        group = self.auto_group()
+        self.color_group_selector(group)
+
+    def update_group_color(self):
+        group = self.get_group()
+        self.color_group_selector(group)
+
+    def color_group_selector(self, group):
+        rgb = cm.ScalarMappable(
+            norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3]
+        rgb = (255 * np.array(rgb)).round().astype(int)
+        self.group_selector.setStyleSheet(
+            'background-color: rgb({:d},{:d},{:d})'.format(*rgb))
 
     def on_scroll(self, event):
         """Process mouse scroll wheel event to zoom."""
-        self.zoom(event.step)
+        self.zoom(event.step, draw=True)
 
-    def zoom(self, sign=1):
+    def zoom(self, sign=1, draw=False):
         """Zoom in on the image."""
         delta = ZOOM_STEP_SIZE * sign
         for axis in range(3):
@@ -928,20 +977,23 @@ class ElectrodePicker(QMainWindow):
                 self.images['cursor'][(axis2, axis)].set_ydata([ymin, ymax])
                 self.images['cursor2'][(axis2, axis)].set_xdata(
                     [xmin, xmax])
+        if draw:
+            self.plt.fig.canvas.draw()
 
-        self.plt.fig.canvas.draw()
-
-    def get_current_elec(self):
-        return (self.elec_names[self.elec_index] if
-                self.elec_names else '')
+    def get_current_elec(self, name=None):
+        if name is None:
+            return self.elec_names[self.elec_index] if self.elec_names else ''
+        else:
+            return name
 
     def update_elec_selection(self):
         name = self.get_current_elec()
         self.elec_label.setText(name)
-        self.elec_list.setCurrentIndex(
-            self.elec_list_model.index(self.elec_index, 0))
+        if name:
+            self.elec_list.setCurrentIndex(
+                self.elec_list_model.index(self.elec_index, 0))
         if name in self.elec_matrix:
-            self.move_cursors_to_pos(*self.elec_matrix[name])
+            self.move_cursors_to_pos()
         self.plt.fig.canvas.draw()
 
     @pyqtSlot()
@@ -972,86 +1024,117 @@ class ElectrodePicker(QMainWindow):
         self.elec_names.append(name)
         self.set_elec_names()
 
-    def color_electrode(self, name, R, A, S, clear=False):
-        index = self.elec_names.index(name)
-        self.elec_data[np.round(R).astype(int) - self.elec_radius:
-                       np.round(R).astype(int) + self.elec_radius + 1,
-                       np.round(A).astype(int) - self.elec_radius:
-                       np.round(A).astype(int) + self.elec_radius + 1,
-                       np.round(S).astype(int) - self.elec_radius:
-                       np.round(S).astype(int) + self.elec_radius + 1] = \
-            np.nan if clear else index
+    def get_group(self):
+        group = self.group_selector.currentIndex()
+        if group == 0:  # auto
+            group = self.auto_group()
+        else:
+            group -= 1  # auto is first
+        return group
 
-    def color_list_item(self, index=None, clear=False):
+    def color_electrode(self, name=None, clear=False):
+        name = self.get_current_elec(name=name)
+        sx, sy, sz = self.RAS_to_cursors(name=name).round().astype(int)
+        self.elec_data[sx - self.elec_radius: sx + self.elec_radius + 1,
+                       sy - self.elec_radius: sy + self.elec_radius + 1,
+                       sz - self.elec_radius: sz + self.elec_radius + 1] = \
+            np.nan if clear else self.elec_matrix[name][3]  # group
+
+    def color_list_item(self, name=None, clear=False):
         """Color the item in the view list for easy id of marked."""
-        if index is None:
-            index = self.elec_index
+        name = self.get_current_elec(name=name)
         color = QtGui.QColor('white')
         if not clear:
             # we need the normalized color map
-            norm = mpl.colors.Normalize(vmin=0, vmax=17)
-            rgba = cm.ScalarMappable(
-                norm=norm, cmap=ELECTRODE_COLORS).to_rgba(index)
-            color.setRgb(*[c * 255 for c in rgba])
+            group = self.elec_matrix[name][3]
+            rgb = cm.ScalarMappable(
+                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3]
+            color.setRgb(*[c * 255 for c in rgb])
         brush = QtGui.QBrush(color)
         brush.setStyle(QtCore.Qt.SolidPattern)
-        self.elec_list_model.setData(self.elec_list_model.index(index, 0),
-                                     brush, QtCore.Qt.BackgroundRole)
+        self.elec_list_model.setData(
+            self.elec_list_model.index(self.elec_names.index(name), 0),
+            brush, QtCore.Qt.BackgroundRole)
+
+    def auto_group(self):
+        name = self.get_current_elec()
+        if not name:
+            return 0
+        group = 0
+        sorted_names = sorted(self.elec_names)
+
+        def find_begin_end_numbers(name):
+            name = list(name)
+            numbers = ''
+            while name[0].isdigit():
+                numbers += name.pop(0)
+            while name[-1].isdigit():
+                numbers = name.pop(-1) + numbers
+            return numbers
+
+        pattern = sorted_names[0].replace(
+            find_begin_end_numbers(sorted_names[0]), '')  # fencepost
+        for this_name in sorted(self.elec_names):
+            this_pattern = this_name.replace(
+                find_begin_end_numbers(this_name), '')
+            if this_pattern != pattern:
+                pattern = this_pattern
+                group += 1
+            if this_name == name:
+                return group
+        return -1
 
     def save_electrodes(self):
         with open(op.join(self.base_path, 'elecs',
                           'electrodes.tsv'), 'w') as fid:
-            fid.write('name\tR\tA\tS\n')
+            fid.write('\t'.join(['name', 'R', 'A', 'S', 'group']) + '\n')
             for name in self.elec_names:  # sort as given
                 if name in self.elec_matrix:
-                    x, y, z = self.elec_matrix[name]
-                    fid.write(f'{name}\t{x}\t{y}\t{z}\n')
+                    x, y, z, group = self.elec_matrix[name]
+                    fid.write('\t'.join(np.array(
+                        [name, x, y, z, int(group)]).astype(str)) + '\n')
 
     def load_electrodes(self):
+        self.elec_data = np.zeros(self.img_data.shape) + np.nan
         self.elec_matrix = dict()
         elec_fname = op.join(self.base_path, 'elecs', 'electrodes.tsv')
         if not op.isfile(elec_fname):
             return
         with open(elec_fname, 'r') as fid:
-            fid.readline()  # for header
+            header = fid.readline()  # for header
+            assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S',
+                                                   'group']
             for line in fid:
-                name, R, A, S = line.rstrip().split('\t')
-                R = float(R)
-                A = float(A)
-                S = float(S)
+                name, R, A, S, group = line.rstrip().split('\t')
+                elec_data = np.array([R, A, S]).astype(float).tolist()
+                elec_data.append(int(group))
                 if name not in self.elec_names:
                     self.elec_names.append(name)
-                self.elec_matrix[name] = np.array([R, A, S])
-                self.color_electrode(name, R, A, S)
+                self.elec_matrix[name] = elec_data
+                self.color_electrode(name=name)
 
     @pyqtSlot()
     def mark_elec(self):
         """Mark the current electrode as at the current crosshair point."""
         self.remove_elec()
-        self.elec_data[self.current_slice[0] - self.elec_radius:
-                       self.current_slice[0] + self.elec_radius + 1,
-                       self.current_slice[1] - self.elec_radius:
-                       self.current_slice[1] + self.elec_radius + 1,
-                       self.current_slice[2] - self.elec_radius:
-                       self.current_slice[2] + self.elec_radius + 1] = \
-            self.elec_index
-
-        self.color_list_item()
-        self.update_elec_images()
-
-        self.elec_matrix[self.elec_names[self.elec_index]] = \
-            self.cursors_to_RAS()
-        self.save_electrodes()
-        self.next_elec()
+        name = self.get_current_elec()
+        if name:
+            self.elec_matrix[name] = \
+                np.append(self.cursors_to_RAS(), self.get_group())
+            self.color_electrode()
+            self.color_list_item()
+            self.update_elec_images(draw=True)
+            self.save_electrodes()
+            self.next_elec()
 
     @pyqtSlot()
     def remove_elec(self):
         name = self.get_current_elec()
         if name in self.elec_matrix:
-            RAS = self.elec_matrix.pop(name)
-            self.color_electrode(name, *RAS, clear=True)
-            self.save_electrodes()
+            self.color_electrode(clear=True)
             self.color_list_item(clear=True)
+            self.elec_matrix.pop(name)
+            self.save_electrodes()
             self.update_elec_images(draw=True)
 
     def update_elec_images(self, axis_selected=None, draw=False):
@@ -1126,15 +1209,9 @@ class ElectrodePicker(QMainWindow):
     def update_radius(self):
         """Update electrode radius."""
         self.elec_radius = np.round(self.radius_slider.value()).astype(int)
-        self.elec_data = np.empty(self.img_data.shape) + np.nan
-        for i, name in enumerate(self.elec_names):
-            if name in self.elec_matrix:
-                coords = self.elec_matrix[name]
-                sx, sy, sz = [np.round(coord).astype(int) for coord in coords]
-                self.elec_data[
-                    sx - self.elec_radius: sx + self.elec_radius + 1,
-                    sy - self.elec_radius: sy + self.elec_radius + 1,
-                    sz - self.elec_radius: sz + self.elec_radius + 1] = i
+        self.elec_data = np.zeros(self.img_data.shape) + np.nan
+        for name in self.elec_matrix:
+            self.color_electrode(name=name)
         self.update_elec_images(draw=True)
 
     def get_axis_selected(self, x, y, return_pos=False):
@@ -1161,15 +1238,14 @@ class ElectrodePicker(QMainWindow):
                         return axis
         return None
 
-    def move_cursors_to_pos(self, R, A, S):
-        self.current_slice[0] = np.round(R).astype(int)
-        self.current_slice[1] = np.round(A).astype(int)
-        self.current_slice[2] = np.round(S).astype(int)
-        self.move_cursor_to(0, x=A, y=S)
-        self.move_cursor_to(1, x=R, y=S)
-        self.move_cursor_to(2, x=R, y=A)
-        self.update_images(draw=False)
-        self.zoom(0)  # doesn't actually zoom just resets view to center
+    def move_cursors_to_pos(self):
+        x, y, z = self.RAS_to_cursors()
+        self.current_slice = np.array([x, y, z]).round().astype(int)
+        self.move_cursor_to(0, x=y, y=z)
+        self.move_cursor_to(1, x=x, y=z)
+        self.move_cursor_to(2, x=x, y=y)
+        self.zoom(0)  # dofesn't actually zoom just resets view to center
+        self.update_images(draw=True)
         self.update_RAS_label()
 
     def move_cursor_to(self, axis, x=None, y=None):
@@ -1180,6 +1256,7 @@ class ElectrodePicker(QMainWindow):
                 y = self.images['cursor2'][(axis2, axis)].get_ydata()[0]
             self.images['cursor2'][(axis2, axis)].set_ydata([y, y])
             self.images['cursor'][(axis2, axis)].set_xdata([x, x])
+        self.zoom(0)
 
     def move_cursor(self, axis, sign, ori):
         for axis2 in range(2):
@@ -1193,6 +1270,7 @@ class ElectrodePicker(QMainWindow):
                     self.images['cursor'][(axis2, axis)].get_data()
                 self.images['cursor'][(axis2, axis)].set_xdata(
                     [xmin + sign, xmax + sign])
+        self.zoom(0)  # center cursor
 
     def keyPressEvent(self, event):
         """Executes when the user presses a key.
@@ -1221,12 +1299,16 @@ class ElectrodePicker(QMainWindow):
         if event.text() == 'n':
             self.new_elec()
 
+        if event.text() == 'c':
+            self.zoom(0, draw=True)
+
         if event.text() == 'h':
             # Show help
             QMessageBox.information(
                 self, 'Help',
                 "Help: 'n': name device, 'e': mark electrode, "
                 "'u': remove electrode, 't': toggle pial, "
+                "'c': center view on cursors, "
                 "b': toggle brain, '3': show 3D view\n"
                 "Maximum intensity projection views: "
                 "'+'/'-': zoom, left/right arrow: left/right "
@@ -1243,7 +1325,7 @@ class ElectrodePicker(QMainWindow):
             self.launch_3D_viewer()
 
         if event.text() in ('=', '+', '-'):
-            self.zoom(sign=-2 * (event.text() == '-') + 1)
+            self.zoom(sign=-2 * (event.text() == '-') + 1, draw=True)
 
         # Changing slices
         if event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_Down,
@@ -1310,12 +1392,23 @@ class ElectrodePicker(QMainWindow):
         """Convert slice coordinate from the viewer to surface RAS
         Returns
         -------
-        elec : array-like
+        elec : np.array
             RAS coordinate of the requested slice coordinate
         """
-        return np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
-                         self.images['cursor'][(0, 0)].get_xdata()[0],
-                         self.images['cursor2'][(0, 0)].get_ydata()[0]])
+        return (np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
+                          self.images['cursor'][(0, 0)].get_xdata()[0],
+                          self.images['cursor2'][(0, 0)].get_ydata()[0]]
+                         ) - VOXEL_SIZES // 2)
+
+    def RAS_to_cursors(self, name=None):
+        """Convert acpc-zero-centered RAS to slice indices.
+        Returns
+        -------
+        slice : np.array
+            The slice coordinates of the given RAS data
+        """
+        name = self.get_current_elec(name=name)
+        return np.array(self.elec_matrix[name][:3]) + VOXEL_SIZES // 2
 
     def launch_3D_viewer(self):
         """Launch 3D viewer to visualize electrodes."""
@@ -1326,15 +1419,12 @@ class ElectrodePicker(QMainWindow):
         coords = list()
         colors = list()
         names = list()
-        nx, ny, nz = VOXEL_SIZES
-        norm = mpl.colors.Normalize(vmin=0, vmax=17)
-        for i, name in enumerate(self.elec_names):
-            if name in self.elec_matrix:
-                R, A, S = self.elec_matrix[name]
-                coords.append([R - nx / 2, A - ny / 2, S - nz / 2])
-                colors.append(cm.ScalarMappable(
-                    norm=norm, cmap=ELECTRODE_COLORS).to_rgba(i)[:3])
-                names.append(name)
+        for name in self.elec_matrix:
+            R, A, S, group = self.elec_matrix[name]
+            coords.append([R, A, S])
+            colors.append(cm.ScalarMappable(
+                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3])
+            names.append(name)
         add_electrodes(np.array(coords), color=np.array(colors),
                        msize=4, labels=names)
 

@@ -308,8 +308,7 @@ def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
                                        'and copy to {}'.format(
         op.join(os.environ['SUBJECTS_DIR'], os.environ['SUBJECT'],
                 'CT', 'CT.nii')))
-    ref_fname = check_file(op.join(base_path, 'mri', 'orig', 'T1.nii'),
-                           'recon')
+    ref_fname = check_file(op.join(base_path, 'mri', 'orig.mgz'), 'recon')
     out_fname = op.join(base_path, 'CT', 'rCT.nii')
 
     if op.isfile(out_fname) and not overwrite:

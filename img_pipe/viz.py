@@ -32,7 +32,7 @@ import numpy as np
 
 import nibabel as nib
 import scipy
-from scipy.ndimage import zoom, binary_closing
+from scipy.ndimage import binary_closing
 
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
                              CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE)
@@ -694,7 +694,8 @@ class ElectrodePicker(QMainWindow):
             self.move_cursors_to_pos()
 
     def load_image_data(self):
-        # Specified resolution to which to resample both the MRI and CT
+        # Specified resolution freesurfer uses, images must be
+        # This resolution so we can plot them overlaid
         vx, vy, vz = VOXEL_SIZES
 
         # prepare MRI data
@@ -708,11 +709,11 @@ class ElectrodePicker(QMainWindow):
                                                            codes)
         # voxel_sizes = nib.affines.voxel_sizes(img.affine)
         nx, ny, nz = np.array(self.img_data.shape, dtype='float')
-        # reample MRI
+        # check mri size to make sure it's correct
         if nx != vx or ny != vx or nz != vz:
-            print(f'Resampling MRI from {nx} {ny} {nz} to {vx} {vy} {vz}')
-            self.img_data = zoom(self.img_data, (vx / nx, vy / ny, vz / nz))
-
+            raise ValueError(f'MRI dimensions found {nx} {ny} {nz} '
+                             f'expected dimensions were {vx} {vy} {vz}, '
+                             'check recon and contact developers')
         # prepare CT data
         ct = nib.load(check_file(op.join(self.base_path, 'CT', 'rCT.nii'),
                                  'coreg_CT_MR'))
@@ -723,10 +724,14 @@ class ElectrodePicker(QMainWindow):
         self.ct_data = nib.orientations.apply_orientation(ct.get_fdata(),
                                                           ct_codes)
         cx, cy, cz = np.array(self.ct_data.shape, dtype='float')
-        # resample CT
+        # check CT size to make sure it's correct
         if cx != vx or cy != vx or cz != vz:
-            print(f'Resampling CT from {cx} {cy} {cz} to {vx} {vy} {vz}')
-            self.ct_data = zoom(self.ct_data, (vx / cx, vy / cy, vz / cz))
+            raise ValueError(f'CT dimensions found {cx} {cy} {cz} '
+                             f'expected dimensions were {vx} {vy} {vz}, '
+                             'make sure `img_pipe.coreg_CT_MR` was run '
+                             'even if the alignment was done by hand '
+                             '(it resamples the CT to the right size)')
+
         # Threshold the CT so only bright objects (electrodes) are visible
         self.ct_data[self.ct_data < 1000] = np.nan
 

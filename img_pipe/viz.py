@@ -52,7 +52,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow,  # noqa
                              QVBoxLayout, QHBoxLayout, QLabel,  # noqa
                              QInputDialog, QMessageBox, QWidget,  # noqa
                              QListView, QSlider, QPushButton,
-                             QComboBox)  # noqa
+                             QComboBox, QPlainTextEdit)  # noqa
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg  # noqa
 
 import mayavi  # noqa
@@ -767,7 +767,7 @@ class ElectrodePicker(QMainWindow):
         button_hbox.addWidget(new_button)
         new_button.released.connect(self.new_elec)
 
-        button_hbox.addStretch(3)
+        button_hbox.addStretch(4)
 
         prev_button = QPushButton('Prev')
         button_hbox.addWidget(prev_button)
@@ -782,9 +782,15 @@ class ElectrodePicker(QMainWindow):
 
         button_hbox.addStretch(1)
 
-        self.RAS_label = QLabel('RAS=({:.3f}, {:.3f}, {:.3f})'.format(
-            *self.cursors_to_RAS()))
-        button_hbox.addWidget(self.RAS_label)
+        RAS_label = QLabel('RAS=')
+        self.RAS_textbox = QPlainTextEdit(
+            '{:.2f}, {:.2f}, {:.2f}'.format(*self.cursors_to_RAS()))
+        self.RAS_textbox.setMaximumHeight(25)
+        self.RAS_textbox.setMaximumWidth(200)
+        self.RAS_textbox.focusOutEvent = self.update_RAS
+        self.RAS_textbox.textChanged.connect(self.check_update_RAS)
+        button_hbox.addWidget(RAS_label)
+        button_hbox.addWidget(self.RAS_textbox)
 
         mark_button = QPushButton('Mark')
         button_hbox.addWidget(mark_button)
@@ -1029,6 +1035,41 @@ class ElectrodePicker(QMainWindow):
         self.elec_names.append(name)
         self.set_elec_names()
 
+    @pyqtSlot()
+    def update_RAS(self, event):
+        text = self.RAS_textbox.toPlainText().replace('\n', '')
+        xyz = text.split(',')
+        if len(xyz) != 3:
+            xyz = text.split(' ')  # spaces also okay as in freesurfer
+        xyz = [var.lstrip().rstrip() for var in xyz]
+
+        def reset_RAS_label():
+            self.RAS_textbox.setPlainText(  # put back if not numeric
+                '{:.2f}, {:.2f}, {:.2f}'.format(*self.cursors_to_RAS()))
+
+        if len(xyz) != 3:
+            reset_RAS_label()
+            return
+        all_float = all([all([dig.isdigit() or dig in ('-', '.')
+                              for dig in var]) for var in xyz])
+        if not all_float:
+            reset_RAS_label()
+            return
+
+        xyz = np.array([float(var) for var in xyz])
+        wrong_size = any([var < -n / 2 or var > n / 2 for var, n in
+                          zip(xyz, VOXEL_SIZES)])
+        if wrong_size:
+            reset_RAS_label()
+            return
+
+        self.move_cursors_to_pos(xyz=xyz + VOXEL_SIZES // 2)
+
+    @pyqtSlot()
+    def check_update_RAS(self):
+        if '\n' in self.RAS_textbox.toPlainText():
+            self.update_RAS(event=None)
+
     def get_group(self):
         group = self.group_selector.currentIndex()
         if group == 0:  # auto
@@ -1241,11 +1282,16 @@ class ElectrodePicker(QMainWindow):
                         return axis, get_position(fxy, axis, b_box)
                     else:
                         return axis
-        return None
+        if return_pos:
+            return None, None
+        else:
+            return None
 
-    def move_cursors_to_pos(self):
-        x, y, z = self.RAS_to_cursors()
-        self.current_slice = np.array([x, y, z]).round().astype(int)
+    def move_cursors_to_pos(self, xyz=None):
+        if xyz is None:
+            xyz = self.RAS_to_cursors()
+        self.current_slice = np.array([*xyz]).round().astype(int)
+        x, y, z = xyz
         self.move_cursor_to(0, x=y, y=z)
         self.move_cursor_to(1, x=x, y=z)
         self.move_cursor_to(2, x=x, y=y)
@@ -1390,7 +1436,7 @@ class ElectrodePicker(QMainWindow):
             self.update_RAS_label()
 
     def update_RAS_label(self):
-        self.RAS_label.setText('RAS=({:.3f}, {:.3f}, {:.3f})'.format(
+        self.RAS_textbox.setPlainText('{:.2f}, {:.2f}, {:.2f}'.format(
             *self.cursors_to_RAS()))
 
     def cursors_to_RAS(self):

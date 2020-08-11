@@ -49,8 +49,8 @@ def check_pipeline():
     print_status('img_pipe.get_electrode_names',
                  op.join(base_path, 'elecs', 'electrode_names.tsv'))
     print_status('img_pipe.recon', op.join(base_path, 'mri', 'aseg.mgz'))
-    print_status('img_pipe.label',
-                 op.join(base_path, 'label', 'lh.aparc.DKTatlas.annot'))
+    print_status('img_pipe.label', op.join(base_path, 'surf',
+                                           'lh.pial.filled.mgz'))
     print_status('img_pipe.coreg_CT_MR', op.join(base_path, 'CT', 'rCT.nii'))
     print_status('img_pipe.mark_electrodes',
                  op.join(base_path, 'elecs', 'electrodes.tsv'))
@@ -132,21 +132,7 @@ def recon(verbose=True):
         os.environ['SUBJECT'], os.environ['SUBJECTS_DIR']))
 
 
-def check_pial():
-    """Opens freeview with the orig.mgz MRI loaded along with the pial surface.
-
-    The user should scroll through to check that the pial surface corresponds
-    correctly to the MRI.
-    """
-    base_path = check_fs_vars()
-    brain_mri = check_file(op.join(base_path, 'mri', 'brain.mgz'), 'recon')
-    lh_pial = check_file(op.join(base_path, 'surf', 'lh.pial'), 'recon')
-    rh_pial = check_file(op.join(base_path, 'surf', 'rh.pial'), 'recon')
-    os.system(f'freeview --volume {brain_mri} --surface {lh_pial} '
-              f'--surface {rh_pial} --viewport \'coronal\'')
-
-
-def edit_pial(verbose=True):
+def plot_pial(verbose=True):
     """This edits the pial surface according to the freesurfer tutorial.
 
     https://surfer.nmr.mgh.harvard.edu/fswiki/FsTutorial/WhiteMatterEdits_freeview
@@ -175,7 +161,7 @@ def edit_pial(verbose=True):
               '{}:edgecolor=red {}:visible=0 {}:visible=0'.format(
                   brainmask, wm, *segs))
     # only run if precise edits were sufficient, otherwise use threshold
-    if input('Run recon (Y/n)?').lower() == 'y':
+    if input('Run recon (Y/n)? ').lower() == 'y':
         os.system('recon-all -autorecon2-wm -autorecon3 -s {} '
                   '-no-isrunning'.format(os.environ['SUBJECT']))
 

@@ -942,14 +942,6 @@ class ElectrodePicker(QMainWindow):
                 self.elec_list_model.index(self.elec_index, 0))
         self.elec_list.keyPressEvent = self.keyPressEvent
 
-    def change_elec(self, index):
-        """Change current electrode to the item selected."""
-        self.elec_index = index.row()
-        name = self.get_current_elec()
-        self.elec_label.setText(name)
-        if name in self.elec_matrix:
-            self.move_cursors_to_pos()
-
     def set_auto_color(self):
         group = self.auto_group()
         self.color_group_selector(group)
@@ -1005,7 +997,13 @@ class ElectrodePicker(QMainWindow):
                 self.elec_list_model.index(self.elec_index, 0))
         if name in self.elec_matrix:
             self.move_cursors_to_pos()
+        self.update_group_color()
         self.plt.fig.canvas.draw()
+
+    def change_elec(self, index):
+        """Change current electrode to the item selected."""
+        self.elec_index = index.row()
+        self.update_elec_selection()
 
     @pyqtSlot()
     def previous_elec(self):

@@ -6,6 +6,7 @@
 import numpy as np
 
 VOXEL_SIZES = np.array([256, 256, 256])
+ELEC_PLOT_SIZE = np.array([1024, 1024])
 ZOOM_STEP_SIZE = 5
 CT_MIN_VAL = 1000
 MAX_N_GROUPS = 17

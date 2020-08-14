@@ -37,15 +37,17 @@ def check_pipeline():
 
     print('#' * 61)  # fencepost
     make_dir(op.join(base_path, 'acpc'))
-    print_status('Put T1 in acpc/T1.nii', op.join(base_path, 'acpc',
-                                                  'T1_orig.nii'))
-    print_status('Align MRI (using freeview)', op.join(base_path, 'acpc',
-                                                       'T1.nii'))
+    print_status('Put T1 in acpc/T1_orig.nii', op.join(base_path, 'acpc',
+                                                       'T1_orig.nii'))
+    print_status('Align MRI (using freeview), save to acpc/T1.nii',
+                 op.join(base_path, 'acpc', 'T1.nii'))
     make_dir(op.join(base_path, 'CT'))
     print_status('Put CT in CT/CT.nii', op.join(base_path, 'CT', 'CT.nii'))
     make_dir(op.join(base_path, 'ieeg'))
+    ieegfs = [f for f in os.listdir(op.join(base_path, 'ieeg')) if
+              op.splitext(f)[-1][:1] in ('.fif', 'edf', 'bdf', 'vhdr', 'set')]
     print_status('Put ieeg in ieeg/(name).(fif|edf|bdf|vhdr|set)',
-                 op.join(base_path, 'CT', 'CT.nii'))
+                 ieegfs[0] if ieegfs else '')
     print_status('img_pipe.get_electrode_names',
                  op.join(base_path, 'elecs', 'electrode_names.tsv'))
     print_status('img_pipe.recon', op.join(base_path, 'mri', 'aseg.mgz'))

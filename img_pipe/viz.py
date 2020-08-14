@@ -35,7 +35,8 @@ import scipy
 from scipy.ndimage import binary_closing
 
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
-                             CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE)
+                             CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
+                             ELEC_PLOT_SIZE)
 from img_pipe.utils import (check_fs_vars, check_file, check_hemi, get_surf,
                             get_azimuth, get_fs_labels, get_fs_colors)
 
@@ -654,7 +655,7 @@ class ElectrodePicker(QMainWindow):
         self.elec_names = list()
         self.load_electrode_names()
 
-        self.elec_radius = 1
+        self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
         self.load_electrodes()  # add already marked electrodes if they exist
 
         self.pial_surf_on = True  # Whether pial surface is visible or not
@@ -666,7 +667,7 @@ class ElectrodePicker(QMainWindow):
         self.make_slice_plots()
 
         button_hbox = self.get_button_bar()
-        slider_title_hbox, slider_hbox = self.get_slider_bar()
+        slider_hbox = self.get_slider_bar()
 
         self.elec_list = QListView()
         self.elec_list.setSelectionMode(Qt.QAbstractItemView.SingleSelection)
@@ -679,7 +680,6 @@ class ElectrodePicker(QMainWindow):
 
         vbox = QVBoxLayout()
         vbox.addLayout(button_hbox)
-        vbox.addLayout(slider_title_hbox)
         vbox.addLayout(slider_hbox)
         vbox.addLayout(main_hbox)
 
@@ -689,7 +689,7 @@ class ElectrodePicker(QMainWindow):
 
         name = self.get_current_elec()
         if name:
-            self.set_auto_color()
+            self.update_group_color()
         if name in self.elec_matrix:
             self.move_cursors_to_pos()
 
@@ -707,6 +707,8 @@ class ElectrodePicker(QMainWindow):
             nib.orientations.aff2axcodes(img.affine))
         self.img_data = nib.orientations.apply_orientation(img.get_fdata(),
                                                            codes)
+        self.mri_min = self.img_data.min()
+        self.mri_max = self.img_data.max()
         # voxel_sizes = nib.affines.voxel_sizes(img.affine)
         nx, ny, nz = np.array(self.img_data.shape, dtype='float')
         # check mri size to make sure it's correct
@@ -723,6 +725,8 @@ class ElectrodePicker(QMainWindow):
             nib.orientations.aff2axcodes(ct.affine))
         self.ct_data = nib.orientations.apply_orientation(ct.get_fdata(),
                                                           ct_codes)
+        self.ct_min = np.nanmin(self.ct_data)
+        self.ct_max = np.nanmax(self.ct_data)
         cx, cy, cz = np.array(self.ct_data.shape, dtype='float')
         # check CT size to make sure it's correct
         if cx != vx or cy != vx or cz != vz:
@@ -731,9 +735,6 @@ class ElectrodePicker(QMainWindow):
                              'make sure `img_pipe.coreg_CT_MR` was run '
                              'even if the alignment was done by hand '
                              '(it resamples the CT to the right size)')
-
-        # Threshold the CT so only bright objects (electrodes) are visible
-        self.ct_data[self.ct_data < 1000] = np.nan
 
         # prepare pial data
         self.pial_data = dict()
@@ -822,42 +823,91 @@ class ElectrodePicker(QMainWindow):
         return button_hbox
 
     def get_slider_bar(self):
-        slider_title_hbox = QHBoxLayout()
+
+        def make_label(name):
+            label = QLabel(name)
+            label.setAlignment(QtCore.Qt.AlignCenter)
+            return label
+
+        def make_slider(smin, smax, sval, sfun):
+            slider = QSlider(QtCore.Qt.Horizontal)
+            slider.setMinimum(smin)
+            slider.setMaximum(smax)
+            slider.setValue(sval)
+            slider.valueChanged.connect(sfun)
+            slider.keyPressEvent = self.keyPressEvent
+            return slider
+
         slider_hbox = QHBoxLayout()
 
-        mri_label = QLabel('MRI')
-        mri_label.setAlignment(QtCore.Qt.AlignCenter)
-        slider_title_hbox.addWidget(mri_label)
-        self.mri_slider = QSlider(QtCore.Qt.Horizontal)
-        self.mri_slider.setMinimum(self.img_data.min())
-        self.mri_slider.setMaximum(self.img_data.max())
-        self.mri_slider.setValue(self.img_data.max())
-        self.mri_slider.valueChanged.connect(self.update_mri_scale)
-        self.mri_slider.keyPressEvent = self.keyPressEvent
-        slider_hbox.addWidget(self.mri_slider)
+        mri_vbox = QVBoxLayout()
+        mri_vbox.addWidget(make_label('MRI min'))
+        mri_vbox.addWidget(make_label('MRI max'))
+        slider_hbox.addLayout(mri_vbox)
 
-        ct_label = QLabel('CT')
-        ct_label.setAlignment(QtCore.Qt.AlignCenter)
-        slider_title_hbox.addWidget(ct_label)
-        self.ct_slider = QSlider(QtCore.Qt.Horizontal)
-        self.ct_slider.setMinimum(CT_MIN_VAL)
-        self.ct_slider.setMaximum(np.nanmax(self.ct_data))
-        self.ct_slider.setValue(np.nanmax(self.ct_data))
-        self.ct_slider.valueChanged.connect(self.update_ct_scale)
-        self.ct_slider.keyPressEvent = self.keyPressEvent
-        slider_hbox.addWidget(self.ct_slider)
+        mri_slider_vbox = QVBoxLayout()
+        self.mri_min_slider = make_slider(
+            self.mri_min, self.mri_max, self.mri_min, self.update_mri_min)
+        mri_slider_vbox.addWidget(self.mri_min_slider)
+        self.mri_max_slider = make_slider(
+            self.mri_min, self.mri_max, self.mri_max, self.update_mri_max)
+        mri_slider_vbox.addWidget(self.mri_max_slider)
+        slider_hbox.addLayout(mri_slider_vbox)
 
-        radius_label = QLabel('radius')
-        radius_label.setAlignment(QtCore.Qt.AlignCenter)
-        slider_title_hbox.addWidget(radius_label)
-        self.radius_slider = QSlider(QtCore.Qt.Horizontal)
-        self.radius_slider.setMinimum(0)
-        self.radius_slider.setMaximum(5)
-        self.radius_slider.setValue(2)
-        self.radius_slider.valueChanged.connect(self.update_radius)
-        self.radius_slider.keyPressEvent = self.keyPressEvent
-        slider_hbox.addWidget(self.radius_slider)
-        return slider_title_hbox, slider_hbox
+        ct_vbox = QVBoxLayout()
+        ct_vbox.addWidget(make_label('CT min'))
+        ct_vbox.addWidget(make_label('CT max'))
+        slider_hbox.addLayout(ct_vbox)
+
+        ct_slider_vbox = QVBoxLayout()
+        self.ct_min_slider = make_slider(self.ct_min, self.ct_max,
+                                         self.ct_min, self.update_ct_min)
+        ct_slider_vbox.addWidget(self.ct_min_slider)
+        self.ct_max_slider = make_slider(self.ct_min, self.ct_max,
+                                         self.ct_max, self.update_ct_max)
+        ct_slider_vbox.addWidget(self.ct_max_slider)
+        slider_hbox.addLayout(ct_slider_vbox)
+
+        radius_slider_vbox = QVBoxLayout()
+        radius_slider_vbox.addWidget(make_label('radius'))
+        elec_max = int(np.mean(ELEC_PLOT_SIZE) // 50)
+        self.radius_slider = make_slider(0, elec_max, self.elec_radius,
+                                         self.update_radius)
+        radius_slider_vbox.addWidget(self.radius_slider)
+        slider_hbox.addLayout(radius_slider_vbox)
+        return slider_hbox
+
+    def make_elec_image(self, axis):
+        """Make electrode data higher resolution so it looks better."""
+        elec_image = np.zeros(ELEC_PLOT_SIZE) + np.nan
+        vx, vy, vz = VOXEL_SIZES
+
+        def color_elec_radius(elec_image, xf, yf, group):
+            ex, ey = np.round(np.array([xf, yf]) * ELEC_PLOT_SIZE).astype(int)
+            for i in range(-self.elec_radius, self.elec_radius + 1):
+                for j in range(-self.elec_radius, self.elec_radius + 1):
+                    if (i**2 + j**2)**0.5 < self.elec_radius:
+                        elec_image[-(ey + i), ex + j] = group
+            return elec_image
+
+        for name in self.elec_matrix:
+            xyz = self.RAS_to_cursors(name)
+            # check if closest to that voxel
+            if np.round(xyz[axis]).astype(int) == self.current_slice[axis]:
+                x, y, z = xyz
+                if axis == 0:
+                    elec_image = color_elec_radius(
+                        elec_image, y / vy, z / vz,
+                        self.elec_matrix[name][3])  # group
+                elif axis == 1:
+                    elec_image = color_elec_radius(
+                        elec_image, x / vx, z / vx,
+                        self.elec_matrix[name][3])  # group
+                elif axis == 2:
+                    elec_image = color_elec_radius(
+                        elec_image, x / vx, y / vy,
+                        self.elec_matrix[name][3])  # group
+        return elec_image
 
     def make_slice_plots(self):
         self.plt = SlicePlots(self)
@@ -892,25 +942,19 @@ class ElectrodePicker(QMainWindow):
                 self.images['pial'][hemi].append(
                     self.plt.axes[0, axis].contour(
                         pial_data, linewidths=0.5, colors='y'))
-            elec_data = np.take(self.elec_data, self.current_slice[axis],
-                                axis=axis).T
             for axis2 in range(2):
                 self.images['elec'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].imshow(
-                    elec_data, cmap=ELECTRODE_COLORS, aspect='auto',
+                    self.make_elec_image(axis), cmap=ELECTRODE_COLORS,
+                    aspect='auto', extent=im_ranges[axis],
                     alpha=1, vmin=0, vmax=MAX_N_GROUPS)
                 self.images['cursor'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].plot(
                     (self.current_slice[1], self.current_slice[1]),
-                    (self.plt.axes[axis2, axis].get_ylim()[0] + 1,
-                     self.plt.axes[axis2, axis].get_ylim()[1] - 1),
-                    color=[0, 1, 0], linewidth=0.25)[0]
+                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
                 self.images['cursor2'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].plot(
-                    (self.plt.axes[axis2, axis].get_xlim()[0] + 1,
-                     self.plt.axes[axis2, axis].get_xlim()[1] - 1),
-                    (self.current_slice[2], self.current_slice[2]),
-                    color=[0, 1, 0], linewidth=0.25)[0]
+                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
                 self.plt.axes[axis2, axis].set_facecolor('k')
 
                 self.plt.axes[axis2, axis].invert_yaxis()
@@ -1076,14 +1120,6 @@ class ElectrodePicker(QMainWindow):
             group -= 1  # auto is first
         return group
 
-    def color_electrode(self, name=None, clear=False):
-        name = self.get_current_elec(name=name)
-        sx, sy, sz = self.RAS_to_cursors(name=name).round().astype(int)
-        self.elec_data[sx - self.elec_radius: sx + self.elec_radius + 1,
-                       sy - self.elec_radius: sy + self.elec_radius + 1,
-                       sz - self.elec_radius: sz + self.elec_radius + 1] = \
-            np.nan if clear else self.elec_matrix[name][3]  # group
-
     def color_list_item(self, name=None, clear=False):
         """Color the item in the view list for easy id of marked."""
         name = self.get_current_elec(name=name)
@@ -1139,7 +1175,6 @@ class ElectrodePicker(QMainWindow):
                         [name, x, y, z, int(group)]).astype(str)) + '\n')
 
     def load_electrodes(self):
-        self.elec_data = np.zeros(self.img_data.shape) + np.nan
         self.elec_matrix = dict()
         elec_fname = op.join(self.base_path, 'elecs', 'electrodes.tsv')
         if not op.isfile(elec_fname):
@@ -1155,7 +1190,6 @@ class ElectrodePicker(QMainWindow):
                 if name not in self.elec_names:
                     self.elec_names.append(name)
                 self.elec_matrix[name] = elec_data
-                self.color_electrode(name=name)
 
     @pyqtSlot()
     def mark_elec(self):
@@ -1165,7 +1199,6 @@ class ElectrodePicker(QMainWindow):
         if name:
             self.elec_matrix[name] = \
                 np.append(self.cursors_to_RAS(), self.get_group())
-            self.color_electrode()
             self.color_list_item()
             self.update_elec_images(draw=True)
             self.save_electrodes()
@@ -1175,7 +1208,6 @@ class ElectrodePicker(QMainWindow):
     def remove_elec(self):
         name = self.get_current_elec()
         if name in self.elec_matrix:
-            self.color_electrode(clear=True)
             self.color_list_item(clear=True)
             self.elec_matrix.pop(name)
             self.save_electrodes()
@@ -1184,9 +1216,8 @@ class ElectrodePicker(QMainWindow):
     def update_elec_images(self, axis_selected=None, draw=False):
         for axis in range(3) if axis_selected is None else [axis_selected]:
             for axis2 in range(2):
-                elec_data = np.take(
-                    self.elec_data, self.current_slice[axis], axis=axis).T
-                self.images['elec'][(axis2, axis)].set_data(elec_data)
+                self.images['elec'][(axis2, axis)].set_data(
+                    self.make_elec_image(axis))
         if draw:
             self.plt.fig.canvas.draw()
 
@@ -1206,6 +1237,9 @@ class ElectrodePicker(QMainWindow):
         for axis in range(3) if axis_selected is None else [axis_selected]:
             ct_data = np.take(self.ct_data, self.current_slice[axis],
                               axis=axis).T
+            # Threshold the CT so only bright objects (electrodes) are visible
+            ct_data[ct_data < self.ct_min] = np.nan
+            ct_data[ct_data > self.ct_max] = np.nan
             for axis2 in range(2):
                 self.images['ct'][(axis2, axis)].set_data(ct_data)
         if draw:
@@ -1235,27 +1269,62 @@ class ElectrodePicker(QMainWindow):
         if draw:
             self.plt.fig.canvas.draw()
 
+    def update_mri_min(self):
+        """Update MRI min slider value."""
+        if self.mri_min_slider.value() > self.mri_max:
+            tmp = self.mri_max
+            self.mri_max = self.mri_min_slider.value()
+            self.mri_max_slider.setValue(self.mri_max)
+            self.mri_min = tmp
+            self.mri_min_slider.setValue(self.mri_min)
+        else:
+            self.mri_min = self.mri_min_slider.value()
+        self.update_mri_scale()
+
+    def update_mri_max(self):
+        """Update MRI max slider value."""
+        if self.mri_max_slider.value() < self.mri_min:
+            tmp = self.mri_min
+            self.mri_min = self.mri_max_slider.value()
+            self.mri_min_slider.setValue(self.mri_min)
+            self.mri_max = tmp
+            self.mri_max_slider.setValue(self.mri_max)
+        else:
+            self.mri_max = self.mri_max_slider.value()
+        self.update_mri_scale()
+
     def update_mri_scale(self):
-        """Update MRI slider value."""
         for mri_img in self.images['mri']:
-            current_min = mri_img.get_clim()
-            mri_img.set_clim([current_min[0], self.mri_slider.value()])
+            mri_img.set_clim([self.mri_min, self.mri_max])
         self.plt.fig.canvas.draw()
 
-    def update_ct_scale(self):
-        """Update CT slider value."""
-        for axis in range(3):
-            for axis2 in range(2):
-                self.images['ct'][(axis2, axis)].set_clim(
-                    [CT_MIN_VAL, self.ct_slider.value()])
-        self.plt.fig.canvas.draw()
+    def update_ct_min(self):
+        """Update CT min slider value."""
+        if self.ct_min_slider.value() > self.ct_max:
+            tmp = self.ct_max
+            self.ct_max = self.ct_min_slider.value()
+            self.ct_max_slider.setValue(self.ct_max)
+            self.ct_min = tmp
+            self.ct_min_slider.setValue(self.ct_min)
+        else:
+            self.ct_min = self.ct_min_slider.value()
+        self.update_ct_images(draw=True)
+
+    def update_ct_max(self):
+        """Update CT max slider value."""
+        if self.ct_max_slider.value() < self.ct_min:
+            tmp = self.ct_min
+            self.ct_min = self.ct_max_slider.value()
+            self.ct_min_slider.setValue(self.ct_min)
+            self.ct_max = tmp
+            self.ct_max_slider.setValue(self.ct_max)
+        else:
+            self.ct_max = self.ct_max_slider.value()
+        self.update_ct_images(draw=True)
 
     def update_radius(self):
         """Update electrode radius."""
         self.elec_radius = np.round(self.radius_slider.value()).astype(int)
-        self.elec_data = np.zeros(self.img_data.shape) + np.nan
-        for name in self.elec_matrix:
-            self.color_electrode(name=name)
         self.update_elec_images(draw=True)
 
     def get_axis_selected(self, x, y, return_pos=False):

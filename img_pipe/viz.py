@@ -30,15 +30,16 @@ import scipy.io
 
 import numpy as np
 
-import nibabel as nib
 import scipy
 from scipy.ndimage import binary_closing
 
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
                              CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
-                             ELEC_PLOT_SIZE)
+                             ELEC_PLOT_SIZE, CORTICAL_SURFACES)
 from img_pipe.utils import (check_fs_vars, check_file, check_hemi, get_surf,
-                            get_azimuth, get_fs_labels, get_fs_colors)
+                            get_azimuth, get_fs_labels, get_fs_colors,
+                            load_electrode_names, load_electrodes,
+                            save_electrodes, load_image_data)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -328,16 +329,13 @@ class ROI:
         number_dict = get_fs_labels()
         color_dict = get_fs_colors()
 
-        cortex_names = [f'{hemi}-{roi}' for hemi in ('Left', 'Right')
-                        for roi in ('Pial', 'Inflated', 'White')]
-
-        if name not in number_dict and name not in cortex_names:
+        if name not in number_dict and name not in CORTICAL_SURFACES:
             raise ValueError(f'Name {name} not recongized')
         # change number label to name
         if isinstance(name, int):
             name = number_dict[name]
         self.name = name
-        if self.name in cortex_names:
+        if self.name in CORTICAL_SURFACES:
             hemi, roi = name.split('-')
             if hemi == 'Left':
                 self.hemi = 'lh'
@@ -652,11 +650,14 @@ class ElectrodePicker(QMainWindow):
 
         # initialize electrode data
         self.elec_index = 0
-        self.elec_names = list()
-        self.load_electrode_names()
+        self.elec_names = load_electrode_names()
 
         self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
-        self.load_electrodes()  # add already marked electrodes if they exist
+        # add already marked electrodes if they exist
+        self.elec_matrix = load_electrodes()
+        for name in self.elec_matrix:
+            if name not in self.elec_names:
+                self.elec_names.append(name)
 
         self.pial_surf_on = True  # Whether pial surface is visible or not
         self.T1_on = True  # Whether T1 is visible or not
@@ -699,14 +700,7 @@ class ElectrodePicker(QMainWindow):
         vx, vy, vz = VOXEL_SIZES
 
         # prepare MRI data
-        img = nib.load(check_file(op.join(self.base_path, 'mri', 'brain.mgz'),
-                                  'recon'))
-        # Apply orientation to the MRI so that the order of the dimensions will
-        # be sagittal, coronal, axial
-        codes = nib.orientations.axcodes2ornt(
-            nib.orientations.aff2axcodes(img.affine))
-        self.img_data = nib.orientations.apply_orientation(img.get_fdata(),
-                                                           codes)
+        self.img_data = load_image_data('mri', 'brain.mgz')
         self.mri_min = self.img_data.min()
         self.mri_max = self.img_data.max()
         # voxel_sizes = nib.affines.voxel_sizes(img.affine)
@@ -716,15 +710,8 @@ class ElectrodePicker(QMainWindow):
             raise ValueError(f'MRI dimensions found {nx} {ny} {nz} '
                              f'expected dimensions were {vx} {vy} {vz}, '
                              'check recon and contact developers')
-        # prepare CT data
-        ct = nib.load(check_file(op.join(self.base_path, 'CT', 'rCT.nii'),
-                                 'coreg_CT_MR'))
-        # Apply orientation to the CT so that the order of the dimensions will
-        # be sagittal, coronal, axial
-        ct_codes = nib.orientations.axcodes2ornt(
-            nib.orientations.aff2axcodes(ct.affine))
-        self.ct_data = nib.orientations.apply_orientation(ct.get_fdata(),
-                                                          ct_codes)
+        # ready ct
+        self.ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR')
         self.ct_min = np.nanmin(self.ct_data)
         self.ct_max = np.nanmax(self.ct_data)
         cx, cy, cz = np.array(self.ct_data.shape, dtype='float')
@@ -739,27 +726,12 @@ class ElectrodePicker(QMainWindow):
         # prepare pial data
         self.pial_data = dict()
         for hemi in ('lh', 'rh'):
-            pial_img = nib.load(check_file(op.join(
-                self.base_path, 'surf', f'{hemi}.pial.filled.mgz'), 'label'))
-            # Apply orientation to pial surface fill
-            pial_codes = nib.orientations.axcodes2ornt(
-                nib.orientations.aff2axcodes(pial_img.affine))
-            self.pial_data[hemi] = nib.orientations.apply_orientation(
-                pial_img.get_fdata(), pial_codes)
+            self.pial_data[hemi] = load_image_data(
+                'surf', f'{hemi}.pial.filled.mgz', 'label')
             self.pial_data[hemi] = binary_closing(self.pial_data[hemi])
 
         # This is the current slice for indexing (as integers for indexing)
         self.current_slice = np.array([vx / 2, vy / 2, vz / 2], dtype=np.int)
-
-    def load_electrode_names(self):
-        elec_name_fname = op.join(self.base_path, 'elecs',
-                                  'electrode_names.tsv')
-        if op.isfile(elec_name_fname):
-            with open(elec_name_fname, 'r') as fid:
-                headers = fid.readline().rstrip().split('\t')
-                name_idx = headers.index('name')
-                for line in fid:
-                    self.elec_names.append(line.rstrip().split('\t')[name_idx])
 
     def get_button_bar(self):
         button_hbox = QHBoxLayout()
@@ -883,14 +855,20 @@ class ElectrodePicker(QMainWindow):
         vx, vy, vz = VOXEL_SIZES
 
         def color_elec_radius(elec_image, xf, yf, group):
+            '''Take the fraction across each dimension of the RAS
+               coordinates converted to xyz and put a circle in that
+               position in this larger resolution image.'''
             ex, ey = np.round(np.array([xf, yf]) * ELEC_PLOT_SIZE).astype(int)
             for i in range(-self.elec_radius, self.elec_radius + 1):
                 for j in range(-self.elec_radius, self.elec_radius + 1):
                     if (i**2 + j**2)**0.5 < self.elec_radius:
+                        # negative y because y axis is inverted
                         elec_image[-(ey + i), ex + j] = group
             return elec_image
 
         for name in self.elec_matrix:
+            # move from middle-centered (half coords positive, half negative)
+            # to bottom-left corner centered (all coords positive).
             xyz = self.RAS_to_cursors(name)
             # check if closest to that voxel
             if np.round(xyz[axis]).astype(int) == self.current_slice[axis]:
@@ -1164,33 +1142,6 @@ class ElectrodePicker(QMainWindow):
                 return group
         return -1
 
-    def save_electrodes(self):
-        with open(op.join(self.base_path, 'elecs',
-                          'electrodes.tsv'), 'w') as fid:
-            fid.write('\t'.join(['name', 'R', 'A', 'S', 'group']) + '\n')
-            for name in self.elec_names:  # sort as given
-                if name in self.elec_matrix:
-                    x, y, z, group = self.elec_matrix[name]
-                    fid.write('\t'.join(np.array(
-                        [name, x, y, z, int(group)]).astype(str)) + '\n')
-
-    def load_electrodes(self):
-        self.elec_matrix = dict()
-        elec_fname = op.join(self.base_path, 'elecs', 'electrodes.tsv')
-        if not op.isfile(elec_fname):
-            return
-        with open(elec_fname, 'r') as fid:
-            header = fid.readline()  # for header
-            assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S',
-                                                   'group']
-            for line in fid:
-                name, R, A, S, group = line.rstrip().split('\t')
-                elec_data = np.array([R, A, S]).astype(float).tolist()
-                elec_data.append(int(group))
-                if name not in self.elec_names:
-                    self.elec_names.append(name)
-                self.elec_matrix[name] = elec_data
-
     @pyqtSlot()
     def mark_elec(self):
         """Mark the current electrode as at the current crosshair point."""
@@ -1198,10 +1149,10 @@ class ElectrodePicker(QMainWindow):
         name = self.get_current_elec()
         if name:
             self.elec_matrix[name] = \
-                np.append(self.cursors_to_RAS(), self.get_group())
+                np.append(self.cursors_to_RAS(), self.get_group(), 'n/a')
             self.color_list_item()
             self.update_elec_images(draw=True)
-            self.save_electrodes()
+            save_electrodes()
             self.next_elec()
 
     @pyqtSlot()
@@ -1210,7 +1161,7 @@ class ElectrodePicker(QMainWindow):
         if name in self.elec_matrix:
             self.color_list_item(clear=True)
             self.elec_matrix.pop(name)
-            self.save_electrodes()
+            save_electrodes()
             self.update_elec_images(draw=True)
 
     def update_elec_images(self, axis_selected=None, draw=False):
@@ -1538,7 +1489,7 @@ class ElectrodePicker(QMainWindow):
         colors = list()
         names = list()
         for name in self.elec_matrix:
-            R, A, S, group = self.elec_matrix[name]
+            R, A, S, group, _ = self.elec_matrix[name]
             coords.append([R, A, S])
             colors.append(cm.ScalarMappable(
                 norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3])

@@ -11,15 +11,15 @@
 
 import os
 import os.path as op
+from subprocess import run
+from shutil import copyfile
 import numpy as np
-from shutil import copyfile, move
 
-import nibabel as nib
-import scipy.io
-
-from img_pipe.config import SUBCORTICAL_INDICES
+from img_pipe.config import SUBCORTICAL_INDICES, ATLAS_DICT, VOXEL_SIZES
 from img_pipe.utils import (check_file, check_dir, make_dir, check_fs_vars,
-                            get_fs_labels, subcort_fs2mlab)
+                            get_ieeg_fnames, get_fs_labels, subcort2surf,
+                            load_image_data, load_electrodes, save_electrodes,
+                            save2mat)
 
 
 def check_pipeline():
@@ -30,7 +30,10 @@ def check_pipeline():
     base_path = check_fs_vars()
 
     def print_status(keyword, fname):
-        status = 'done ' if op.isfile(fname) else 'to do'
+        if fname is None:
+            status = 'to do'
+        else:
+            status = 'done ' if op.isfile(fname) else 'to do'
         spaces = ' ' * (50 - len(keyword))
         print(f'# {keyword}{spaces}# {status} #')
         print('#' * 61)
@@ -44,10 +47,8 @@ def check_pipeline():
     make_dir(op.join(base_path, 'CT'))
     print_status('Put CT in CT/CT.nii', op.join(base_path, 'CT', 'CT.nii'))
     make_dir(op.join(base_path, 'ieeg'))
-    ieegfs = [f for f in os.listdir(op.join(base_path, 'ieeg')) if
-              op.splitext(f)[-1][:1] in ('.fif', 'edf', 'bdf', 'vhdr', 'set')]
     print_status('Put ieeg in ieeg/(name).(fif|edf|bdf|vhdr|set)',
-                 ieegfs[0] if ieegfs else '')
+                 get_ieeg_fnames(return_first=True, verbose=False))
     print_status('img_pipe.get_electrode_names',
                  op.join(base_path, 'elecs', 'electrode_names.tsv'))
     print_status('img_pipe.recon', op.join(base_path, 'mri', 'aseg.mgz'))
@@ -56,26 +57,14 @@ def check_pipeline():
     print_status('img_pipe.coreg_CT_MR', op.join(base_path, 'CT', 'rCT.nii'))
     print_status('img_pipe.mark_electrodes',
                  op.join(base_path, 'elecs', 'electrodes.tsv'))
+    print_status('img_pipe.label_electrodes',
+                 op.join(base_path, 'labels', 'tmp.tsv'))
 
 
 def get_electrode_names(verbose=True):
     import mne
     base_path = check_fs_vars()
-    fnames = [op.join(base_path, 'ieeg', fname) for fname in
-              os.listdir(op.join(base_path, 'ieeg'))
-              if op.splitext(fname)[-1] in
-              ('.fif', '.edf', '.bdf', '.vhdr', '.set')]
-    if len(fnames) > 1:
-        raise ValueError('{} data files found in ieeg, expected one'.format(
-            len(fnames)))
-    elif len(fnames) == 0:
-        if len(os.listdir(op.join(base_path, 'ieeg'))) > 0:
-            for fname in os.listdir(op.join(base_path, 'ieeg')):
-                raise ValueError('Extension {} not recognized, options are'
-                                 'fif, edf, bdf, vhdr (brainvision) and set '
-                                 '(eeglab)'.format(op.splitext(fname)[-1]))
-        raise ValueError('No data files found in ieeg folder')
-    fname = fnames[0]
+    fname = get_ieeg_fnames(return_first=True, verbose=verbose)
     ext = op.splitext(fname)[-1]
     if ext == '.fif':
         raw = mne.io.read_raw_fif(fname, preload=False)
@@ -126,12 +115,12 @@ def recon(verbose=True):
     T1_mgz = op.join(orig_dir, '001.mgz')
     if verbose:
         print('Converting to mgz format for recon-all')
-    os.system(f'mri_convert {T1_file2} {T1_mgz}')
+    run(f'mri_convert {T1_file2} {T1_mgz}'.split(' '))
 
     if verbose:
         print('Running recon all, this will take many hours')
-    os.system('recon-all -s {} -sd {} -all'.format(
-        os.environ['SUBJECT'], os.environ['SUBJECTS_DIR']))
+    run('recon-all -s {} -sd {} -all'.format(
+        os.environ['SUBJECT'], os.environ['SUBJECTS_DIR']).split(' '))
 
 
 def plot_pial(verbose=True):
@@ -158,70 +147,46 @@ def plot_pial(verbose=True):
     for seg in ('lh.white', 'lh.pial', 'rh.white', 'rh.pial',
                 'rh.inflated', 'lh.inflated'):
         segs.append(check_file(op.join(base_path, 'surf', seg), 'recon'))
-    os.system('freeview -v {} {}:colormap=heat:opacity=0.4 '
-              '-f {}:edgecolor=blue {}:edgecolor=red {}:edgecolor=blue '
-              '{}:edgecolor=red {}:visible=0 {}:visible=0'.format(
-                  brainmask, wm, *segs))
+    run('freeview -v {} {}:colormap=heat:opacity=0.4 '
+        '-f {}:edgecolor=blue {}:edgecolor=red {}:edgecolor=blue '
+        '{}:edgecolor=red {}:visible=0 {}:visible=0'.format(
+            brainmask, wm, *segs).split(' '))
     # only run if precise edits were sufficient, otherwise use threshold
     if input('Run recon (Y/n)? ').lower() == 'y':
-        os.system('recon-all -autorecon2-wm -autorecon3 -s {} '
-                  '-no-isrunning'.format(os.environ['SUBJECT']))
+        run('recon-all -autorecon2-wm -autorecon3 -s {} '
+            '-no-isrunning'.format(os.environ['SUBJECT']).split(' '))
 
 
-def label(verbose=True):
-    """Create gyri, mesh and subcortical labels.
+def label(overwrite=False, verbose=True):
+    """Create gyri, subcortical and pial labels.
 
-    For meshes, the mat files made in the mesh directory can
-    be imported into plotting tools like Blender or used
-    directly in python or MATLAB.
-
-    For subcortical labels, see `aseg2srf.sh`; the indices in
-    `SUBCORTICAL_INDICES` correspond to the indices in
-    FreeSurferColorLUT.txt` which map onto the names of the
-    subcortical structures.
+    See `aseg2srf.sh`; the indices in `SUBCORTICAL_INDICES`
+    correspond to the indices in FreeSurferColorLUT.txt` which
+    map onto the names of the subcortical structures.
 
     Parameters
     ----------
+    overwrite : bool
+        Whether to overwrite the target filepath
     verbose : bool
-        Whether to print text updating on the status of the function.
+        Whether to print text updating on the status of the function
     """
     base_path = check_fs_vars()
-    # create gyri labels directory
-    gyri_labels_dir = make_dir(op.join(base_path, 'label', 'gyri'))
-    # This version of mri_annotation2label uses the coarse labels
-    # from the Desikan-Killiany Atlas
+    if op.isfile(op.join(base_path, 'surf', 'lh.pial.filled.mgz')) and \
+            not overwrite:
+        raise ValueError('img_pipe.label has already been run and '
+                         'overwrite=False')
+
+    label_dir = make_dir(op.join(base_path, 'label'))
+
     for hemi in ('lh', 'rh'):
         if verbose:
             print(f'Making labels for {hemi}')
-        os.system('mri_annotation2label --subject {} --hemi {} --surface pial '
-                  '--outdir {}'.format(os.environ['SUBJECT'], hemi,
-                                       gyri_labels_dir))
-
-    # make meshes
-    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
-    mesh_dir = make_dir(op.join(base_path, 'meshes'))
-    # loop through types of mesh for plotting
-    for mesh_name in ('pial', 'white', 'inflated'):
-        # loop through hemispheres for this mesh, create one .mat file for each
-        for hemi in ('lh', 'rh'):
-            if verbose:
-                print(f'Making {hemi} {mesh_name} mesh')
-            mesh_surf = op.join(surf_dir, f'{hemi}.{mesh_name}')
-            vert, tri = nib.freesurfer.read_geometry(mesh_surf)
-            out_file = op.join(mesh_dir,
-                               f'{hemi}_{mesh_name}_trivert.mat')
-            out_file_struct = op.join(
-                mesh_dir, '{}_{}_{}.mat'.format(os.environ['SUBJECT'],
-                                                hemi, mesh_name))
-            scipy.io.savemat(out_file, {'tri': tri, 'vert': vert})
-            cortex = {'tri': tri + 1, 'vert': vert}
-            scipy.io.savemat(out_file_struct, {'cortex': cortex})
+        run(['mri_annotation2label', '-s', os.environ['SUBJECT'],
+             '--hemi', hemi, '--surface', 'pial', '--outdir', label_dir])
 
     # make subcortical labels
-    # set ascii dir name
-    ascii_dir = make_dir(op.join(base_path, 'ascii'))
-    # convert all ascii subcortical meshes to matlab vert, tri coords
-    subcort_dir = make_dir(op.join(base_path, 'meshes', 'subcortical'))
+    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
     # get the names of the numbered regions
     number_dict = get_fs_labels()
 
@@ -229,21 +194,21 @@ def label(verbose=True):
     if verbose:
         print('::: Tesselating freesurfer subcortical segmentations '
               'from aseg using aseg2srf... :::')
-    if os.system('{} -s {} -l "{}"'.format(
-        op.join(op.dirname(__file__), 'aseg2srf.sh'),
-        os.environ['SUBJECT'],
-            ' '.join([str(idx) for idx in SUBCORTICAL_INDICES]))):
+    if run([op.join(op.dirname(__file__), 'aseg2srf.sh'), '-s',
+            os.environ['SUBJECT'], '-l',
+            ' '.join([str(i) for i in SUBCORTICAL_INDICES])]).returncode:
         raise RuntimeError('error in aseg2srf.sh')
 
+    ascii_dir = check_dir(op.join(base_path, 'ascii'),
+                          instructions='aseg2srf error check with developers')
+
     if verbose:
-        print('::: Converting all ascii segmentations to matlab tri-vert :::')
+        print('::: Converting all ascii segmentations surface geometry :::')
     for i in SUBCORTICAL_INDICES:
-        fname_srf = check_file(op.join(ascii_dir, 'aseg_{:03d}.srf'.format(i)),
-                               instructions='`aseg2surf` error, please report')
-        fname = fname_srf.replace('.srf', '.asc')
-        move(fname_srf, fname)
-        check_file(fname, instructions='Renaming aseg issue, please report')
-        subcort_fs2mlab(subcort_dir, fname, number_dict[i])
+        fname = check_file(op.join(ascii_dir, 'aseg_{:03d}.srf'.format(i)),
+                           instructions='`aseg2surf` error, please report')
+        out_fname = op.join(surf_dir, f'subcort.{number_dict[i]}')
+        subcort2surf(fname, out_fname)
 
     # filled pial surfaces
     for hemi in ('lh', 'rh'):
@@ -254,12 +219,12 @@ def label(verbose=True):
             print(f'Filled pial surface already exists for {hemi}')
         else:
             pial_surf = op.join(base_path, 'surf', f'{hemi}.pial')
-            os.system(f'mris_fill -c -r 1 {pial_surf} {pial_fill}')
+            run(f'mris_fill -c -r 1 {pial_surf} {pial_fill}'.split(' '))
 
 
 def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
                 ftol=0.0001, overwrite=False, verbose=True):
-    '''Coregistrs the anatomical MR with the CT using fsl.
+    """Coregistrs the anatomical MR with the CT using nibabel.
 
     Parameters are arguments for
     nipy.algorithms.registration.histogram_registration.HistogramRegistration
@@ -281,8 +246,8 @@ def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
     overwrite : bool
         Whether to overwrite the target filepath
     verbose : bool
-        Whether to print text updating on the status of the function.
-    '''
+        Whether to print text updating on the status of the function
+    """
     from nipy import load_image, save_image
     from nipy.algorithms.registration.histogram_registration import (
         HistogramRegistration)
@@ -343,3 +308,76 @@ def mark_electrodes(verbose=True):
     if verbose:
         print('Launching electrode picker')
     launch_electrode_picker()
+
+
+def label_elecs(atlas='desikan-killiany', picks=None,
+                overwrite=False, verbose=True):
+    """Automatically labels electrodes based on the freesurfer recon.
+
+    The atlases are described here:
+    https://surfer.nmr.mgh.harvard.edu/fswiki/CorticalParcellation
+    The allowed atlases are 'desikan-killiany' and 'destrieux'
+
+    Parameters
+    ----------
+    atlas : str
+        The atlas to use for labeling of electrodes.
+    picks: list
+        An optional list of electrodes to name if you are using different
+        atlases for different groups.
+    overwrite : bool
+        Whether to overwrite the target filepath
+    verbose : bool
+        Whether to print text updating on the status of the function.
+
+    """
+    if atlas not in ATLAS_DICT:
+        raise ValueError('Atlas must be in {}, got {}'.format(
+            list(ATLAS_DICT.keys()), atlas))
+    if verbose:
+        print('Loading electrode matrix')
+    elec_matrix = load_electrodes()
+    if verbose:
+        print('Loading vertex labels')
+    fs_labels = get_fs_labels()
+    if verbose:
+        print('Getting parcellation')
+    img_data = load_image_data('mri', ATLAS_DICT[atlas] + '.mgz')
+    if verbose:
+        print("Labeling electrodes...")
+    for name in elec_matrix:
+        if picks is None or name in picks:
+            r, a, s, _, label = elec_matrix[name]
+            if label != 'n/a' and not overwrite:
+                raise ValueError(f'Label already assigned for {name}'
+                                 'and overwrite=False')
+            vx, vy, vz = np.round([r, a, s]).astype(int) + VOXEL_SIZES // 2
+            elec_matrix[name][4] = fs_labels[img_data[vx, vy, vz].astype(int)]
+    save_electrodes(elec_matrix)
+
+
+def export_labels(overwrite=False, verbose=True):
+    """Converts freesurfer surfaces to mat files.
+
+    Parameters
+    ----------
+    overwrite : bool
+        Whether to overwrite the target filepath.
+    verbose : bool
+        Whether to print text updating on the status of the function.
+    """
+    base_path = check_fs_vars()
+    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
+    mesh_dir = make_dir(op.join(base_path, 'meshes'))
+    # loop through types of mesh for plotting
+    for mesh_name in ('pial', 'white', 'inflated'):
+        # loop through hemispheres for this mesh, create one .mat file for each
+        for hemi in ('lh', 'rh'):
+            if verbose:
+                print(f'Making {hemi} {mesh_name} mesh')
+            out_fname = op.join(mesh_dir, '{}_{}_{}.mat'.format(
+                os.environ['SUBJECT'], hemi, mesh_name))
+            if op.isfile(out_fname) and not overwrite:
+                raise ValueError(f'File {out_fname} exists and '
+                                 'overwrite is False')
+            save2mat(op.join(surf_dir, f'{hemi}.{mesh_name}'), out_fname)

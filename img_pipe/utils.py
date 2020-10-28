@@ -8,6 +8,7 @@ import os.path as op
 import numpy as np
 import scipy
 from scipy.io import loadmat, savemat
+import nibabel as nib
 
 
 def check_file(my_file, function=None, instructions=None):
@@ -57,6 +58,105 @@ def get_azimuth(rois):
     return 180 if 'lh' in hemis else 0
 
 
+def get_ieeg_fnames(return_first=False, verbose=True):
+    base_path = check_fs_vars()
+    ieeg_fnames = [op.join(base_path, 'ieeg', fname) for fname in
+                   os.listdir(op.join(base_path, 'ieeg'))
+                   if op.splitext(fname)[-1][1:] in
+                   ('fif', 'edf', 'bdf', 'vhdr', 'set')]
+    if len(ieeg_fnames) > 1:
+        if verbose:
+            print('Warning {} data files, {}, found in ieeg, using names'
+                  'from the first one'.format(len(ieeg_fnames), ieeg_fnames))
+    elif len(ieeg_fnames) == 0:
+        if len(os.listdir(op.join(base_path, 'ieeg'))) > 0:
+            for fname in os.listdir(op.join(base_path, 'ieeg')):
+                raise ValueError('Extension {} not recognized, options are'
+                                 'fif, edf, bdf, vhdr (brainvision) and set '
+                                 '(eeglab)'.format(op.splitext(fname)[-1]))
+        return None
+    if return_first:
+        return ieeg_fnames[0]
+    else:
+        return ieeg_fnames
+
+
+def load_electrode_names():
+    base_path = check_fs_vars()
+    elec_name_fname = op.join(base_path, 'elecs', 'electrode_names.tsv')
+    elec_names = list()
+    if op.isfile(elec_name_fname):
+        with open(elec_name_fname, 'r') as fid:
+            headers = fid.readline().rstrip().split('\t')
+            name_idx = headers.index('name')
+            for line in fid:
+                elec_names.append(line.rstrip().split('\t')[name_idx])
+    return elec_names
+
+
+def load_electrodes():
+    base_path = check_fs_vars()
+    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
+    elec_matrix = dict()
+    if not op.isfile(elec_fname):
+        return elec_matrix
+    with open(elec_fname, 'r') as fid:
+        header = fid.readline()  # for header
+        assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S',
+                                               'group', 'label']
+        for line in fid:
+            name, R, A, S, group, label = line.rstrip().split('\t')
+            elec_data = np.array([R, A, S]).astype(float).tolist()
+            elec_data += [int(group), label]
+            elec_matrix[name] = elec_data
+    return elec_matrix
+
+
+def save_electrodes(elec_matrix):
+    base_path = check_fs_vars()
+    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
+    with open(elec_fname, 'w') as fid:
+        fid.write('\t'.join(['name', 'R', 'A', 'S', 'group', 'label']) + '\n')
+        for name in elec_matrix:  # sort as given
+            x, y, z, group, label = elec_matrix[name]
+            fid.write('\t'.join(np.array(
+                [name, x, y, z, int(group), label]).astype(str)) + '\n')
+
+
+def load_image_data(dirname, basename, function='recon-all'):
+    base_path = check_fs_vars()
+    ext = op.splitext(basename)[-1]
+    fname = check_file(op.join(base_path, dirname, basename), function)
+    if ext == 'mgz':
+        img = nib.freesurfer.load(fname)
+    else:
+        img = nib.load(fname)
+    codes = nib.orientations.axcodes2ornt(
+        nib.orientations.aff2axcodes(img.affine))
+    img_data = nib.orientations.apply_orientation(img.get_fdata(), codes)
+    return img_data
+
+
+def get_vert_labels():
+    base_path = check_fs_vars()
+    gyri_labels_dir = check_dir(op.join(base_path, 'label', 'gyri'))
+    label_fnames = [op.join(gyri_labels_dir, f) for f in
+                    os.listdir(gyri_labels_dir) if f.endswith('label')]
+    vert_labels = dict()
+    for label_fname in label_fnames:
+        label_name = label_fname.split('.')[1].strip()
+        label_data = np.loadtxt(label_fname, skiprows=2)
+        for v in label_data[:, 0].astype(int):
+            vert_labels[v] = label_name
+    return vert_labels
+
+
+def save2mat(fname, out_fname):
+    """Take in a freesurfer surface and save it as a mat file."""
+    vert, tri = nib.freesurfer.read_geometry(fname)
+    scipy.io.savemat(out_fname, {'tri': tri, 'vert': vert})
+
+
 def get_surf(hemi, roi, template=None):
     """ Utility for loading the pial surface for a given hemisphere.
 
@@ -90,54 +190,35 @@ def get_surf(hemi, roi, template=None):
     return loadmat(vert_data_fname)
 
 
-def subcort_fs2mlab(subcort_dir, subcort, nuc):
-    """Convert freesurfer ascii subcort segmentations to .mat triangular mesh.
+def subcort2surf(fname, out_fname):
+    """Convert srf files to freesurfer surface files.
 
     Parameters
     ----------
-    subcort_dir : str
+    fname : str
         The directory to save out to
-    subcort : str
+    out_fname : str
         Name of the subcortical mesh ascii file (e.g. aseg_058.asc).
-    nuc : str
-        Name of the subcortical nucleus (e.g. 'rAcumb')
     """
-
     # use freesurfer mris_convert to get ascii subcortical surface
-    with open(subcort, 'r') as fid:
+    with open(fname, 'r') as fid:
         fid.readline()  # get rid of comments in header
         subcort_mat = [line.rstrip() for line in fid]
-
     # extract inds for vert and tri
     subcort_inds = [int(i) for i in subcort_mat.pop(0).split(' ')]
     subcort_vert = [item.strip(' 0')
                     for item in subcort_mat[:subcort_inds[0]]]
     subcort_vert = [item.split('  ')
                     for item in subcort_vert]  # seperate strings
-
     # Convert into an array of floats
     subcort_vert = np.array(np.vstack((subcort_vert)), dtype=np.float)
-
     # get rows for triangles only, strip 0 column, and split into seperate
     # strings
     subcort_tri = [item[:-2] for item in subcort_mat[subcort_inds[0] + 1:]]
     subcort_tri = [item.split(' ')
                    for item in subcort_tri]  # seperate strings
     subcort_tri = np.array(np.vstack((subcort_tri)), dtype=np.int)
-
-    outfile = op.join(subcort_dir, f'{nuc}_subcort_trivert.mat')
-    # save tri/vert matrix
-    savemat(outfile, {'tri': subcort_tri, 'vert': subcort_vert})
-
-    # convert inds to scipy mat
-    subcort_inds = scipy.mat(subcort_inds)
-    savemat(op.join(subcort_dir, f'{nuc}_subcort_inds.mat'),
-            {'inds': subcort_inds})  # save inds
-
-    out_file_struct = op.join(subcort_dir, f'{nuc}_subcort.mat')
-
-    cortex = {'tri': subcort_tri + 1, 'vert': subcort_vert}
-    scipy.io.savemat(out_file_struct, {'cortex': cortex})
+    nib.freesurfer.io.write_geometry(out_fname, subcort_vert, subcort_tri)
 
 
 def get_fs_labels():
@@ -146,7 +227,8 @@ def get_fs_labels():
                          'freesurfer was not sourced, source '
                          'to continue')
     label_fname = check_file(op.join(os.environ['FREESURFER_HOME'],
-                                     'FreeSurferColorLUT.txt'))
+                                     'FreeSurferColorLUT.txt'),
+                             instructions='check your freesurfer installation')
     number_dict = dict()
     with open(label_fname, 'r') as fid:
         for line in fid:
@@ -164,7 +246,8 @@ def get_fs_colors():
                          'freesurfer was not sourced, source '
                          'to continue')
     label_fname = check_file(op.join(os.environ['FREESURFER_HOME'],
-                                     'FreeSurferColorLUT.txt'))
+                                     'FreeSurferColorLUT.txt'),
+                             instructions='check your freesurfer installation')
     color_dict = dict()
     with open(label_fname, 'r') as fid:
         for line in fid:

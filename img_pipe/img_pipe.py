@@ -154,7 +154,7 @@ def label(overwrite=False, verbose=True):
     # TO DO:
     # - try aseg2srf for all the unique labels in an aseg
     # for plotting all rois
-    # - figure out how to morph points to a common atlas
+    # - figure out how to morph points to a common atlas (mri_vol2vol?)
 
     # make gyri labels
     for atlas, seg in ATLAS_DICT.items():

@@ -14,7 +14,7 @@ import mne
 from img_pipe.config import VOXEL_SIZES, CORTICAL_SURFACES
 
 
-def list_rois():
+def list_rois(atlas=):
     """Lists the regions of interest available for plotting."""
     base_path = check_fs_vars()
     surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')

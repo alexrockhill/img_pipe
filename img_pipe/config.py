@@ -10,11 +10,15 @@ ELEC_PLOT_SIZE = np.array([1024, 1024])
 ZOOM_STEP_SIZE = 5
 CT_MIN_VAL = 1000
 MAX_N_GROUPS = 17
-ATLAS_DICT = {'desikan-killiany': 'aparc+aseg',
-              'DKT': 'aparc.DKTatlas+aseg',
-              'destrieux': 'aparc.a2009s+aseg'}
-CORTICAL_SURFACES = [f'{hemi}-{roi}' for hemi in ('Left', 'Right')
-                     for roi in ('Pial', 'Inflated', 'White')]
+ATLAS_DICT = {'desikan-killiany': 'aparc',
+              'DKT': 'aparc.DKTatlas',
+              'destrieux': 'aparc.a2009s'}
+
+TEMPLATES = ['V1_average', 'cvs_avg35', 'cvs_avg35_inMNI152', 'fsaverage',
+             'fsaverage3', 'fsaverage4', 'fsaverage5', 'fsaverage6',
+             'fsaverage_sym']
+CORTICAL_SURFACES = [f'{hemi}.{roi}' for hemi in ('lh', 'rh')
+                     for roi in ('pial', 'inflated', 'white')]
 
 
 SUBCORTICAL_INDICES = [4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 26,

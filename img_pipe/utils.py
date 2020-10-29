@@ -6,9 +6,47 @@
 import os
 import os.path as op
 import numpy as np
+
 import scipy
-from scipy.io import loadmat, savemat
 import nibabel as nib
+import mne
+
+from img_pipe.config import VOXEL_SIZES, CORTICAL_SURFACES
+
+
+def list_rois():
+    """Lists the regions of interest available for plotting."""
+    base_path = check_fs_vars()
+    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
+    return CORTICAL_SURFACES + [f for f in os.listdir(surf_dir)
+                                if f.split('.')[0] == 'sc']
+
+
+def export_labels(overwrite=False, verbose=True):
+    """Converts freesurfer surfaces to mat files.
+
+    Parameters
+    ----------
+    overwrite : bool
+        Whether to overwrite the target filepath.
+    verbose : bool
+        Whether to print text updating on the status of the function.
+    """
+    base_path = check_fs_vars()
+    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
+    mesh_dir = make_dir(op.join(base_path, 'meshes'))
+    # loop through types of mesh for plotting
+    for mesh_name in ('pial', 'white', 'inflated'):
+        # loop through hemispheres for this mesh, create one .mat file for each
+        for hemi in ('lh', 'rh'):
+            if verbose:
+                print(f'Making {hemi} {mesh_name} mesh')
+            out_fname = op.join(mesh_dir, '{}_{}_{}.mat'.format(
+                os.environ['SUBJECT'], hemi, mesh_name))
+            if op.isfile(out_fname) and not overwrite:
+                raise ValueError(f'File {out_fname} exists and '
+                                 'overwrite is False')
+            save2mat(op.join(surf_dir, f'{hemi}.{mesh_name}'), out_fname)
 
 
 def check_file(my_file, function=None, instructions=None):
@@ -45,19 +83,6 @@ def check_fs_vars():
     return op.join(os.environ['SUBJECTS_DIR'], os.environ['SUBJECT'])
 
 
-def check_hemi(hemi):
-    if hemi not in ('lh', 'rh', 'both'):
-        raise ValueError(f'Unexpected hemi argument {hemi}')
-    return ('lh', 'rh') if hemi == 'both' else (hemi,)
-
-
-def get_azimuth(rois):
-    hemis = np.unique([roi.hemi for roi in rois])
-    if 'both' in hemis or ('lh' in hemis and 'rh' in hemis):
-        return 90
-    return 180 if 'lh' in hemis else 0
-
-
 def get_ieeg_fnames(return_first=False, verbose=True):
     base_path = check_fs_vars()
     ieeg_fnames = [op.join(base_path, 'ieeg', fname) for fname in
@@ -81,20 +106,42 @@ def get_ieeg_fnames(return_first=False, verbose=True):
         return ieeg_fnames
 
 
-def load_electrode_names():
-    base_path = check_fs_vars()
-    elec_name_fname = op.join(base_path, 'elecs', 'electrode_names.tsv')
-    elec_names = list()
-    if op.isfile(elec_name_fname):
-        with open(elec_name_fname, 'r') as fid:
-            headers = fid.readline().rstrip().split('\t')
-            name_idx = headers.index('name')
-            for line in fid:
-                elec_names.append(line.rstrip().split('\t')[name_idx])
-    return elec_names
+def load_raw(verbose=True):
+    """Load the intracranial electrophysiology data file."""
+    if verbose:
+        print('Loading an electrophysiology file')
+    fname = get_ieeg_fnames(return_first=True, verbose=verbose)
+    ext = op.splitext(fname)[-1]
+    if ext == '.fif':
+        raw = mne.io.read_raw_fif(fname, preload=False)
+    elif ext == '.edf':
+        raw = mne.io.read_raw_edf(fname, preload=False)
+    elif ext == '.bdf':
+        raw = mne.io.read_raw_bdf(fname, preload=False)
+    elif ext == '.vhdr':
+        raw = mne.io.read_raw_brainvision(fname, preload=False)
+    elif ext == '.set':
+        raw = mne.io.read_raw_eeglab(fname, preload=False)
+    ch_indices = mne.pick_types(raw.info, meg=False, eeg=True,
+                                ecog=True, seeg=True)
+    if not len(ch_indices) > 0:
+        raise ValueError(f'No eeg, ecog or seeg channels found in {fname}, '
+                         'check that the data is correctly typed')
+    return raw
 
 
-def load_electrodes():
+def load_electrode_names(verbose=True):
+    """Loads the names of electrodes from the electrophysiology data file."""
+    if verbose:
+        print('Loading electrode names')
+    raw = load_raw(verbose=verbose)
+    return [ch for ch in raw.ch_names if ch not in ('Event', 'STI 014')]
+
+
+def load_electrodes(verbose=True):
+    """Load the registered electrodes."""
+    if verbose:
+        print('Loading electrode matrix')
     base_path = check_fs_vars()
     elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
     elec_matrix = dict()
@@ -112,7 +159,10 @@ def load_electrodes():
     return elec_matrix
 
 
-def save_electrodes(elec_matrix):
+def save_electrodes(elec_matrix, verbose=True):
+    """Save the location of the electrodes."""
+    if verbose:
+        print('Saving electrode positions')
     base_path = check_fs_vars()
     elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
     with open(elec_fname, 'w') as fid:
@@ -123,7 +173,11 @@ def save_electrodes(elec_matrix):
                 [name, x, y, z, int(group), label]).astype(str)) + '\n')
 
 
-def load_image_data(dirname, basename, function='recon-all'):
+def load_image_data(dirname, basename, function='img_pipe.recon',
+                    verbose=True):
+    """Load data from a 3D image file (e.g. CT, MR)."""
+    if verbose:
+        print(f'Loading {basename}')
     base_path = check_fs_vars()
     ext = op.splitext(basename)[-1]
     fname = check_file(op.join(base_path, dirname, basename), function)
@@ -134,10 +188,17 @@ def load_image_data(dirname, basename, function='recon-all'):
     codes = nib.orientations.axcodes2ornt(
         nib.orientations.aff2axcodes(img.affine))
     img_data = nib.orientations.apply_orientation(img.get_fdata(), codes)
+    if not np.array_equal(np.array(img_data.shape, dtype=int), VOXEL_SIZES):
+        raise ValueError(f'MRI dimensions found {img_data.shape} '
+                         f'expected dimensions were {VOXEL_SIZES}, '
+                         'check recon and contact developers')
     return img_data
 
 
-def get_vert_labels():
+def get_vert_labels(verbose=True):
+    """Load the freesurfer vertex labels."""
+    if verbose:
+        print('Loading vertex labels')
     base_path = check_fs_vars()
     gyri_labels_dir = check_dir(op.join(base_path, 'label', 'gyri'))
     label_fnames = [op.join(gyri_labels_dir, f) for f in
@@ -157,40 +218,7 @@ def save2mat(fname, out_fname):
     scipy.io.savemat(out_fname, {'tri': tri, 'vert': vert})
 
 
-def get_surf(hemi, roi, template=None):
-    """ Utility for loading the pial surface for a given hemisphere.
-
-    Parameters
-    ----------
-    hem : str
-        Hemisphere for the surface. If blank, defaults to 'both'.
-        Otherwise, use 'lh' or 'rh' for the left or right hemisphere
-        respectively.
-    roi : str
-        The region of interest to load.  Should be a Mesh that exists
-        in the subject's Meshes directory, called [roi]_trivert.mat
-    template : str, optional
-        Name of the template to use if plotting electrodes on an
-        atlas brain. e.g. 'cvs_avg35_inMNI152'
-
-    Returns
-    -------
-    cortex : dict
-        Dictionary containing 'tri' and 'vert' for the loaded region
-        of interest mesh.
-    """
-    base_path = check_fs_vars()
-    if template is None:
-        mesh_dir = check_dir(op.join(base_path, 'meshes'), 'label')
-    else:
-        mesh_dir = check_dir(op.join(os.environ['SUBJECTS_DIR'], template),
-                             'label')
-    vert_data_fname = check_file(
-        op.join(mesh_dir, f'{hemi}_{roi}_trivert.mat'), 'label')
-    return loadmat(vert_data_fname)
-
-
-def subcort2surf(fname, out_fname):
+def srf2surf(fname, out_fname):
     """Convert srf files to freesurfer surface files.
 
     Parameters
@@ -222,6 +250,7 @@ def subcort2surf(fname, out_fname):
 
 
 def get_fs_labels():
+    """Get the corresponance between numbers and freesurfer areas."""
     if 'FREESURFER_HOME' not in os.environ:
         raise ValueError('FREESURFER_HOME not in environment, '
                          'freesurfer was not sourced, source '
@@ -241,6 +270,7 @@ def get_fs_labels():
 
 
 def get_fs_colors():
+    """Get the colors of freesurfer areas."""
     if 'FREESURFER_HOME' not in os.environ:
         raise ValueError('FREESURFER_HOME not in environment, '
                          'freesurfer was not sourced, source '
@@ -258,22 +288,10 @@ def get_fs_colors():
     return color_dict
 
 
-def shorten_name(name):
-    return name.replace('-', '').replace('Left', 'l').replace('Right', 'r')
-
-
-# For animations, from pycortex
-def linear(x, y, m):
-    (1. - m) * x + m * y
-
-
-def smooth_step(x, y, m):
-    linear(x, y, 3 * m ** 2 - 2 * m ** 3)
-
-
-def smoother_step(x, y, m):
-    linear(x, y, 6 * m ** 5 - 15 * m ** 4 + 10 * m ** 3)
-
-
-mixes = dict(linear=linear, smooth_step=smooth_step,
-             smoother_step=smoother_step)
+def surf_name(name):
+    """Match naming conventions for surf files."""
+    name = name.replace('Left-', 'lh.').replace('Right-', 'rh.')
+    name = name.replace('ctx_lh_', 'lh.ctx.').replace('ctx_rh_', 'rh.ctx.')
+    name = name.replace('wm_lh_', 'lh.wm.').replace('wm_rh_', 'rh.wm.')
+    name = name.replace('ctx-', 'ctx.').replace('-', '_').lower()
+    return name

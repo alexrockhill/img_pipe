@@ -2,8 +2,10 @@
 
 __version__ = '2.0'
 
-from img_pipe.img_pipe import (check_pipeline, get_electrode_names, recon,  # noqa
-                               plot_pial, label, coreg_CT_MR, mark_electrodes)  # noqa
+from img_pipe.utils import list_rois, export_labels  # noqa
+from img_pipe.img_pipe import (check_pipeline, recon, plot_pial, label,  # noqa
+                               coreg_CT_MR, mark_electrodes,
+                               auto_mark_electrodes, label_electrodes, warp,
+                               export_labels)
 
-from img_pipe.viz import (plot_brain, plot_recon_anatomy,  # noqa
-                          ROI, get_rois, launch_electrode_picker)  # noqa
+from img_pipe.viz import ROI, get_rois, plot_brain, launch_electrode_picker  # noqa

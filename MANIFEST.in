@@ -2,5 +2,3 @@ recursive-include img_pipe *
 include img_pipe/dependencies.sh
 include README.md
 include requirements.txt
-
-

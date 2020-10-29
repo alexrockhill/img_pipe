@@ -1,30 +1,8 @@
-''' This module contains a function (ctmr_brain_plot) that takes as
- input a 3d coordinate set of triangular mesh vertices (vert) and
- an ordered list of their indices (tri), to produce a 3d surface
- model of an individual brain. Assigning the result of the plot
- to a variable enables interactive changes to be made to the OpenGl
- mesh object. Default shading is phong point shader (shiny surface).
-
- usage: from ctmr_brain_plot import *
-        dat = scipy.io.loadmat('/path/to/lh_pial_trivert.mat');
-        mesh = ctmr_brain_plot(dat['tri'], dat['vert']);
-        mlab.show()
-
- A second function contained in this module can be used to plot electrodes
- as glyphs (spehres) or 2d circles. The function (el_add) takes as input
- a list of 3d coordinates in freesurfer surface RAS space and plots them
- according to the color and size parameters that you provide.
-
- usage: elecs = scipy.io.loadmat('/path/to/hd_grid.mat')['elecmatrix'];
-        points = el_add(elecs, color = (1, 0, 0), msize = 2.5);
-        mlab.show()
-
-Modified for use in python from MATLAB code originally written by
-Kai Miller and Dora Hermes (ctmr_gui,
-see https://github.com/dorahermes/Paper_Hermes_2010_JNeuroMeth)
-
-'''
-
+"""Vizualization functions for img_pipe."""
+# Authors: Alex Rockhill <aprockhill@mailbox.org>
+#
+# License: BSD (3-clause)
+import os
 import os.path as op
 import scipy.io
 
@@ -36,10 +14,10 @@ from scipy.ndimage import binary_closing
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
                              CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
-from img_pipe.utils import (check_fs_vars, check_file, check_hemi, get_surf,
+from img_pipe.utils import (check_fs_vars, check_dir, check_hemi, get_surf,
                             get_azimuth, get_fs_labels, get_fs_colors,
                             load_electrode_names, load_electrodes,
-                            save_electrodes, load_image_data)
+                            save_electrodes, load_image_data, load_raw)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -60,6 +38,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg  # noqa
 import mayavi  # noqa
 from mayavi import mlab  # noqa
 
+import mne  # noqa
+from mne.viz import ClickableImage  # noqa
+
 ELECTRODE_COLORS = mcolors.LinearSegmentedColormap.from_list(
     'elec_colors', np.vstack(
         (cm.Set1(np.linspace(0., 1, MAX_N_GROUPS // 2 + 1 - MAX_N_GROUPS % 2)),
@@ -67,230 +48,9 @@ ELECTRODE_COLORS = mcolors.LinearSegmentedColormap.from_list(
 NORM = mpl.colors.Normalize(vmin=0, vmax=MAX_N_GROUPS)
 
 
-def _ctmr_gauss_plot(tri, vert, color=(0.8, 0.8, 0.8), elecs=None,
-                     weights=None, opacity=1.0, representation='surface',
-                     line_width=1.0, gsp=10, cmap=mpl.cm.get_cmap('RdBu_r'),
-                     show_colorbar=True, new_fig=True, vmin=None, vmax=None,
-                     ambient=0.4225, specular=0.333, specular_power=66,
-                     diffuse=0.6995, interpolation='phong'):
-    """This function plots the 3D brain surface mesh
-
-    Parameters
-    ----------
-        color : tuple
-            (n,n,n) tuple of floats between 0.0 and 1.0,
-            background color of brain
-        elecs : array-like
-            [nchans x 3] matrix of electrode coordinate values in 3D
-        weights : array-like
-            [nchans x 1] - if [elecs] is also given,
-            this will color the brain vertices according to these weights
-        msize : float
-            size of the electrode.  default = 2
-        opacity : float (0.0 - 1.0)
-            opacity of the brain surface (value from 0.0 - 1.0)
-        cmap : str or mpl.colors.LinearSegmentedColormap
-            colormap to use when plotting gaussian weights with [elecs]
-            and [weights]
-        representation : {'surface', 'wireframe'}
-            surface representation
-        line_width : float
-            width of lines for triangular mesh
-        gsp : float
-            gaussian smoothing parameter, larger makes electrode activity
-            more spread out across the surface if specified
-
-    Returns
-    -------
-    mesh : mayavi mesh (actor)
-    mlab : mayavi mlab scene
-    """
-    # if color is another iterable, make it a tuple.
-    color = tuple(color)
-
-    brain_color = []
-
-    if elecs is not None:
-        brain_color = np.zeros(vert.shape[0],)
-        for i in np.arange(elecs.shape[0]):
-            b_z = np.abs(vert[:, 2] - elecs[i, 2])
-            b_y = np.abs(vert[:, 1] - elecs[i, 1])
-            b_x = np.abs(vert[:, 0] - elecs[i, 0])
-            gauss_wt = np.nan_to_num(
-                weights[i] * np.exp((-(b_x ** 2 + b_z ** 2 + b_y ** 2)) / gsp))
-            brain_color = brain_color + gauss_wt
-
-        # scale the colors so that it matches the weights that were passed in
-        brain_color *= (np.abs(weights).max() / np.abs(brain_color).max())
-        if vmin is None and vmax is None:
-            vmin, vmax = -np.abs(brain_color).max(), np.abs(brain_color).max()
-
-    # plot cortex and begin display
-    if new_fig:
-        mlab.figure(fgcolor=(0, 0, 0), bgcolor=(1, 1, 1), size=(1200, 900))
-
-    if elecs is not None:
-        kwargs = {}
-        if type(cmap) == str:
-            kwargs.update(colormap=cmap)
-
-        mesh = mlab.triangular_mesh(vert[:, 0], vert[:, 1], vert[:, 2], tri,
-                                    representation=representation,
-                                    opacity=opacity, line_width=line_width,
-                                    scalars=brain_color, vmin=vmin, vmax=vmax,
-                                    **kwargs)
-
-        if type(cmap) == mpl.colors.LinearSegmentedColormap:
-            mesh.module_manager.scalar_lut_manager.lut.table = \
-                (cmap(np.linspace(0, 1, 255)) * 255).astype('int')
-    else:
-        mesh = mlab.triangular_mesh(vert[:, 0], vert[:, 1], vert[:, 2], tri,
-                                    color=color, representation=representation,
-                                    opacity=opacity, line_width=line_width)
-
-    # cell_data = mesh.mlab_source.dataset.cell_data
-    # cell_data.scalars = brain_color
-    # cell_data.scalars.name = 'Cell data'
-    # cell_data.update()
-
-    # mesh2 = mlab.pipeline.set_active_attribute(mesh,
-    # cell_scalars='Cell data')
-    # mlab.pipeline.surface(mesh)
-    if weights is not None and show_colorbar:
-        mlab.colorbar()
-
-    # change OpenGL mesh properties for phong point light shading
-    mesh.actor.property.ambient = ambient
-    mesh.actor.property.specular = specular
-    mesh.actor.property.specular_power = specular_power
-    mesh.actor.property.diffuse = diffuse
-    mesh.actor.property.interpolation = interpolation
-    # mesh.scene.light_manager.light_mode = 'vtk'
-    if opacity < 1.0:
-        mesh.scene.renderer.set(use_depth_peeling=True)
-        # maximum_number_of_peels=100, occlusion_ratio=0.0
-
-    # Make the mesh look smoother
-    for child in mlab.get_engine().scenes[0].children:
-        poly_data_normals = child.children[0]
-        # Feature angle says which angles are considered hard corners
-        poly_data_normals.filter.feature_angle = 80.0
-
-    return mesh, mlab
-
-
-def add_electrodes(elecs, color=(1., 0., 0.), msize=2, labels=None,
-                   label_offset=-1.0, ambient=0.3261, specular=1,
-                   specular_power=16, diffuse=0.6995, interpolation='phong',
-                   **kwargs):
-    '''This function adds the electrode matrix [elecs] (nchans x 3) to
-    the scene.
-
-    Parameters
-    ----------
-        elecs : array-like
-            [nchans x 3] matrix of electrode coordinate values in 3D
-        color : tuple (triplet) or numpy array
-            Electrode color is either a triplet (r, g, b),
-            or a numpy array with the same shape as [elecs]
-            to plot one color per electrode
-        msize : float
-            size of the electrode.  default = 2
-        label_offset : float
-            how much to move the number labels out by (so not blocked
-            by electrodes)
-        **kwargs :
-            any other keyword arguments that can be passed to points3d
-    '''
-
-    # Get the current keyword arguments
-    cur_kwargs = dict(color=color, scale_factor=msize, resolution=25)
-
-    # Allow the user to override the default keyword arguments using kwargs
-    cur_kwargs.update(kwargs)
-
-    # plot the electrodes as spheres
-    # If we have one color for each electrode, color them separately
-    if type(color) is np.ndarray:
-        if color.shape[0] == elecs.shape[0]:
-            # for e in np.arange(elecs.shape[0]):
-            #     points = mlab.points3d(elecs[e,0], elecs[e,1], elecs[e,2],
-            #                            scale_factor=msize,
-            #                            color=tuple(color[e,:]),
-            #                            resolution=25)
-            unique_colors = np.array(list(set([tuple(row) for row in color])))
-            for individual_color in unique_colors:
-                indices = np.where((color == individual_color).all(axis=1))[0]
-                cur_kwargs.update(color=tuple(individual_color))
-                points = mlab.points3d(elecs[indices, 0], elecs[indices, 1],
-                                       elecs[indices, 2], **cur_kwargs)
-        else:
-            print('Warning: color array does not match the size of '
-                  'the electrode matrix')
-
-    # Otherwise, use the same color for all electrodes
-    else:
-        points = mlab.points3d(elecs[:, 0], elecs[:, 1], elecs[:, 2],
-                               **cur_kwargs)
-
-    # Set display properties
-    points.actor.property.ambient = ambient
-    points.actor.property.specular = specular
-    points.actor.property.specular_power = specular_power
-    points.actor.property.diffuse = diffuse
-    points.actor.property.interpolation = interpolation
-    # points.scene.light_manager.light_mode = 'vtk'
-
-    if labels is not None:
-        for label_idx, label in enumerate(labels):
-            mayavi.mlab.text3d(elecs[label_idx, 0] + label_offset,
-                               elecs[label_idx, 1],
-                               elecs[label_idx, 2],
-                               str(label), orient_to_camera=True)
-    return points, mlab
-
-
-def get_elecs_anat(region):
-    base_path = check_fs_vars()
-    tdt_fname = check_file(op.join(base_path, 'elecs', 'TDT_elecs_all.mat'))
-    tdt = scipy.io.loadmat(tdt_fname)
-    return tdt['elecmatrix'][np.where(tdt['anatomy'][:, 3] == region)[0], :]
-
-
-def _ctmr_plot(hemi, elecs, weights=None, interactive=False):
-    base_path = check_fs_vars()
-    hemi_data_fname = check_file(op.join(base_path, 'meshes',
-                                         f'{hemi}_pial_trivert.mat'))
-    hemi_array = scipy.io.loadmat(hemi_data_fname)
-    if weights is None:
-        weights = np.ones((elecs.shape[0])) * -1.
-    mesh, mlab = _ctmr_gauss_plot(hemi_array['tri'], hemi_array['vert'],
-                                  elecs=elecs, weights=weights,
-                                  color=(0.8, 0.8, 0.8), cmap='RdBu')
-
-    mesh.actor.property.opacity = 1.0  # Make brain semi-transparent
-
-    # View from the side
-    if hemi == 'lh':
-        azimuth = 180
-    elif hemi == 'rh':
-        azimuth = 0
-    mlab.view(azimuth, elevation=90)
-    arr = mlab.screenshot(antialiased=True)
-    plt.figure(figsize=(20, 10))
-    plt.imshow(arr, aspect='equal')
-    plt.axis('off')
-    plt.show()
-    if interactive:
-        mlab.show()
-    else:
-        mlab.close()
-    return mesh, mlab
-
-
 class ROI:
     def __init__(self, name, color=None, opacity=1.0,
-                 representation='surface', gaussian=False, template=None):
+                 rep='surface', template=None):
         """Class defining a region of interest (ROI) mesh.
 
         This could be, for example, a mesh for the left hippocampus,
@@ -298,22 +58,16 @@ class ROI:
 
         Parameters
         ----------
-        name : str
-            The name of the ROI
-            Either an ROI in `FreeSurferColorLUT.txt` or 'Left-'/'Right-' +
-            'Pial'/ 'Inflated'/'White'.
-        color : tuple
+        name: str
+            The name of the ROI (e.g 'lh.pial'). See :func:`img_pipe.list_rois`
+            for the full list.
+        color: tuple
             Tuple for the ROI's color where each value is between 0.0 and 1.0.
-        opacity : float (between 0.0 and 1.0)
+        opacity: float (between 0.0 and 1.0)
             opacity of the mesh, between 0.0 and 1.0
-        representation : {'surface', 'wireframe'}
+        rep: {'surface', 'wireframe'}
             surface representation type
-        gaussian: bool
-            specifies how to represent electrodes and their weights on
-            this mesh, note that setting gaussian to True means the mesh
-            color cannot be specified by the user and will instead
-            use colors from the loaded colormap.
-        template : None or str
+        template: str
             Name of the template to use if plotting electrodes on an
             atlas brain. e.g. 'cvs_avg35_inMNI152'
 
@@ -328,6 +82,10 @@ class ROI:
         base_path = check_fs_vars()
         number_dict = get_fs_labels()
         color_dict = get_fs_colors()
+        surf_dir = (check_dir(op.join(base_path, 'surf'), 'recon')
+                    if template is None else
+                    check_dir(op.join(os.environ['FREESURFER_HOME'],
+                                      'subjects', template)))
 
         if name not in number_dict and name not in CORTICAL_SURFACES:
             raise ValueError(f'Name {name} not recongized')
@@ -335,40 +93,12 @@ class ROI:
         if isinstance(name, int):
             name = number_dict[name]
         self.name = name
-        if self.name in CORTICAL_SURFACES:
-            hemi, roi = name.split('-')
-            if hemi == 'Left':
-                self.hemi = 'lh'
-            elif hemi == 'Right':
-                self.hemi = 'rh'
-            self.mesh = get_surf(self.hemi, roi.lower(), template=template)
-        else:
-            if 'Left' in name:
-                self.hemi = 'lh'
-            elif 'Right' in name:
-                self.hemi = 'rh'
-            else:
-                self.hemi = 'both'
-            # check if subcortical
-            if self.name in [number_dict[idx] for idx in SUBCORTICAL_INDICES]:
-                fname = op.join(base_path, 'meshes', 'subcortical',
-                                f'{self.name}_subcort_trivert.mat')
-            else:
-                fname = op.join(base_path, 'meshes',
-                                f'{self.name}_trivert.mat')
-            self.mesh = scipy.io.loadmat(fname)
+        self.vert, self.tri = mne.read_surface()
         if color is None:
-            if name in color_dict:
-                self.color = (c / 255 for c in color_dict[name])
-            else:
-                self.color = (0.8, 0.8, 0.8)
+            self.color = ((c / 255 for c in color_dict[name])
+                          if name in color_dict else (0.8,) * 3)
         self.opacity = opacity
-        self.representation = representation
-        self.gaussian = gaussian
-
-    def get_kwargs(self):
-        return dict(color=self.color, opacity=self.opacity,
-                    representation=self.representation)
+        self.rep = rep
 
 
 def get_rois(group='all', opacity=1.0, representation='surface'):
@@ -405,153 +135,83 @@ def get_rois(group='all', opacity=1.0, representation='surface'):
         raise ValueError(f'Unrecognized group {group}')
 
 
-def plot_brain(rois=None, elecs=None, weights=None, cmap='RdBu',
-               show_fig=True, screenshot=False, helper_call=False,
-               vmin=None, vmax=None, azimuth=None, elevation=90,
-               opacity=1.0):
+def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
+               elevation=None, opacity=1.0, show=True, verbose=True):
     """Plots multiple meshes on one figure.
     Defaults to plotting both hemispheres of the pial surface.
 
     Parameters
     ----------
-    rois : list
+    rois: list
         List of roi objects created like so:
         hipp_roi = ROI(name='Left-Hippocampus', color=(0.5,0.1,0.8)))
         See `FreeSurferColorLUT.txt` for available ROI names.
         Defaults to [ROI('Left-Pial'), ROI('Right-Pial')]
-    elecs : array-like
-        [nchans x 3] electrode coordinate matrix
-    weights : array-like
-        [nchans x 3] weight matrix associated with the electrode
-        coordinate matrix
-    cmap : str
-        String specifying what colormap to use
-    show_fig : bool
+    picks: list
+        If None, all electrodes are plotted else only picks are plotted.
+    elec_scale: float
+        How large to plot the electrodes (arbitrary units)
+    cmap: str
+        Which colormap to use.
+    azimuth: float
+        Azimuth for brain view.
+    elevation: float
+        Elevation for brain view.
+    opacity: float
+        How transparent to make the image between 0 (transparent) and 1 (not).
+    show: bool
         whether to show the figure in an interactive window
-    screenshot: bool
-        whether to save a screenshot and show using matplotlib
-        (usually inline a notebook)
-    helper_call : bool
-        if plot_brain being used as a helper subcall,
-        don't close the mlab instance
-    vmin : float
-        Minimum color value when using cmap
-    vmax : float
-        Maximum color value when using cmap
-    azimuth : float
-        Azimuth for brain view.  By default (if azimuth=None),
-        this will be set automatically to the left side for hemi='lh',
-        right side for hemi='rh', or front view for 'pial'
-    elevation : float
-        Elevation for brain view. Default: 90
-    opacity : float
-        Opaqueness between 0 and 1.
+    verbose : bool
+        Whether to print text updating on the status of the function.
+
     Returns
     -------
-    mlab : mayavi mlab scene
+    renderer.figure: mayavi.core.scene.Scene
+        The scene for figure handling such as taking images.
 
     Example
     -------
-    >>> from img_pipe import roi, get_elecs, plot_brain
+    >>> from img_pipe import roi, plot_brain
     >>> pial = ROI('pial', (0.6, 0.3, 0.6), 0.1, 'wireframe', True),
     >>> hipp = ROI('Left-Hippocampus', (0.5, 0.1, 0.8), 1.0, 'surface', True)
-    >>> elecs = get_elecs()['elec_matrix']
-    >>> plot_brain(rois=[pial, hipp], elecs=elecs,
-                   weights=np.random.uniform(0, 1, (elecs.shape[0])))
+    >>> plot_brain(rois=[pial, hipp])
     """
+    base_path = check_fs_vars()
+    elec_matrix = load_electrodes()
+
+    if elec_matrix:
+        vmin = min([elec[3] for elec in elec_matrix.values()])
+        vmax = max([elec[3] for elec in elec_matrix.values()])
+    else:
+        vmin, vmax = 0
+    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+    cmap = cm.ScalarMappable(norm=norm, cmap=cmap)
+
+    if picks is not None:
+        elec_matrix = {ch: elec_matrix[ch] for ch in picks
+                       if ch in elec_matrix}
 
     if rois is None:
         rois = get_rois('pial')
-    from mayavi import mlab
 
-    mlab.figure(fgcolor=(0, 0, 0), bgcolor=(1, 1, 1), size=(1200, 900))
+    renderer = mne.viz.backends.renderer.create_3d_figure(
+        size=(1200, 900), bgcolor='w', scene=False)
+    mne.viz.set_3d_view(figure=renderer.figure,
+                        azimuth=azimuth, elevation=elevation)
 
-    # if there are any rois with gaussian set to True,
-    # don't plot any elecs as points3d, to avoid mixing gaussian representation
-    # if needed, simply add the elecs by calling add_electrodes
+    for elec_data in elec_matrix.values():
+        x, y, z, group, _ = elec_data
+        renderer.sphere(center=(x, y, z), color=cmap.to_rgba(group)[:3],
+                        scale=elec_scale)
+
     for roi in rois:
-        # setup kwargs for ctmr_brain_plot.ctmr_gauss_plot()
-        kwargs = roi.get_kwargs()
-        kwargs.update(color=roi.color, new_fig=False, cmap=cmap)
-        if roi.gaussian:
-            kwargs.update(elecs=elecs, weights=weights, vmin=vmin, vmax=vmax)
+        renderer.mesh(*roi.vert.T, triangles=roi.tri, color=roi.color,
+                      opacity=opacity)
 
-        # default roi_name of 'pial' plots both hemispheres' pial surfaces
-        _ctmr_gauss_plot(roi.mesh['tri'], roi.mesh['vert'],
-                         opacity=opacity, new_fig=False)
-
-    if any([roi.gaussian for roi in rois]) and elecs is not None:
-        # if elecmatrix passed in but no weights specified,
-        # default to all ones for the electrode color weights
-        if weights is None:
-            add_electrodes(elecs)
-        else:
-            # Map the weights onto the current colormap
-            elec_colors = cm.get_cmap(cmap)(weights)[:, :3]
-            add_electrodes(elecs, color=elec_colors)
-
-    if azimuth is None:
-        azimuth = get_azimuth(rois)
-
-    mlab.view(azimuth, elevation)
-
-    if screenshot:
-        arr = mlab.screenshot(antialiased=True)
-        plt.figure(figsize=(20, 10))
-        plt.imshow(arr, aspect='equal')
-        plt.axis('off')
-        plt.show()
-    else:
-        arr = []
-
-    if show_fig:
+    if show:
         mlab.show()
 
-    if not helper_call and not show_fig:
-        mlab.close()
-
-    return mlab
-
-
-def plot_recon_anatomy(hemi='both', verbose=True):
-    """Plot the anatomy of the reconstruction using mayavi."""
-    base_path = check_fs_vars()
-    for hemi in check_hemi(hemi):
-        vert_data_fname = check_file(op.join(base_path, 'meshes',
-                                             f'{hemi}_pial_trivert.mat'))
-        vert_data = scipy.io.loadmat(vert_data_fname)
-        tdt_fname = check_file(op.join(base_path, 'elecs',
-                                       'TDT_elecs_all.mat'))
-        tdt = scipy.io.loadmat(tdt_fname)
-
-        # Plot the pial surface
-        mesh, mlab = _ctmr_gauss_plot(vert_data['tri'], vert_data['vert'],
-                                      color=(0.8, 0.8, 0.8))
-
-        # Make a list of electrode numbers
-        elec_numbers = np.arange(tdt['elec_matrix'].shape[0]) + 1
-
-        # Find all the unique brain areas in this subject
-        brain_areas = np.unique(tdt['anatomy'][:, 3])
-
-        # plot the electrodes in each brain area
-        for b_area in brain_areas:
-            # Add relevant extra information to the label if needed
-            label = b_area[0]
-            if not any([label.startswith(name) for name in
-                        ('ctx', 'Left', 'Right', 'Brain', 'Unknown')]):
-                label = f'ctx-{hemi}-{label}'
-                if verbose:
-                    print(label)
-            if label:
-                electrode_color = np.array(CMAP[label]) / 255.
-                add_electrodes(
-                    np.atleast_2d(
-                        tdt['elecmatrix'][tdt['anatomy'][:, 3] == label, :]),
-                    color=tuple(electrode_color),
-                    numbers=elec_numbers[tdt['anatomy'][:, 3] == label])
-    mlab.show()
-    return mesh, mlab
+    return renderer.figure
 
 
 class ComboBox(QComboBox):
@@ -703,25 +363,11 @@ class ElectrodePicker(QMainWindow):
         self.img_data = load_image_data('mri', 'brain.mgz')
         self.mri_min = self.img_data.min()
         self.mri_max = self.img_data.max()
-        # voxel_sizes = nib.affines.voxel_sizes(img.affine)
-        nx, ny, nz = np.array(self.img_data.shape, dtype='float')
-        # check mri size to make sure it's correct
-        if nx != vx or ny != vx or nz != vz:
-            raise ValueError(f'MRI dimensions found {nx} {ny} {nz} '
-                             f'expected dimensions were {vx} {vy} {vz}, '
-                             'check recon and contact developers')
+
         # ready ct
         self.ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR')
         self.ct_min = np.nanmin(self.ct_data)
         self.ct_max = np.nanmax(self.ct_data)
-        cx, cy, cz = np.array(self.ct_data.shape, dtype='float')
-        # check CT size to make sure it's correct
-        if cx != vx or cy != vx or cz != vz:
-            raise ValueError(f'CT dimensions found {cx} {cy} {cz} '
-                             f'expected dimensions were {vx} {vy} {vz}, '
-                             'make sure `img_pipe.coreg_CT_MR` was run '
-                             'even if the alignment was done by hand '
-                             '(it resamples the CT to the right size)')
 
         # prepare pial data
         self.pial_data = dict()

@@ -14,10 +14,10 @@ from scipy.ndimage import binary_closing
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
                              CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
-from img_pipe.utils import (check_fs_vars, check_dir, check_hemi, get_surf,
-                            get_azimuth, get_fs_labels, get_fs_colors,
+from img_pipe.utils import (check_fs_vars, check_dir,
+                            get_fs_labels, get_fs_colors,
                             load_electrode_names, load_electrodes,
-                            save_electrodes, load_image_data, load_raw)
+                            save_electrodes, load_image_data)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')

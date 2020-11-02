@@ -14,8 +14,21 @@ import mne
 from img_pipe.config import VOXEL_SIZES, CORTICAL_SURFACES
 
 
-def list_rois(atlas=):
-    """Lists the regions of interest available for plotting."""
+def list_rois(atlas=None, template=None):
+    """Lists the regions of interest available for plotting.
+
+    Parameters
+    ----------
+    atlas: str
+        The segementation atlas to use; 'desikan-killiany' (default),
+        'DKT' or 'destrieux'.
+    template: str
+        The common reference brain template to use, defaults to the
+        individual subject. May be 'V1_average', 'cvs_avg35',
+        'cvs_avg35_inMNI152', 'fsaverage', 'fsaverage3', 'fsaverage4',
+        'fsaverage5', 'fsaverage6' or 'fsaverage_sym'.
+
+    """
     base_path = check_fs_vars()
     surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
     return CORTICAL_SURFACES + [f for f in os.listdir(surf_dir)
@@ -194,6 +207,23 @@ def load_image_data(dirname, basename, function='img_pipe.recon',
                          'check recon and contact developers')
     return img_data
 
+
+def aseg_to_surf(aseg, idx, T1):
+    """Creates a mesh surface from the voxel segementation data.
+
+    Adapted from https://github.com/mmvt/mmvt/blob/master/src/
+    misc/create_subcortical_surf.py
+    """
+    aseg = aseg.copy()
+    aseg = np.where(aseg == idx, 10, 255)
+    aseg[aseg != idx] = 255
+    aseg[aseg == idx] = 10
+    aseg = np.array(aseg, dtype=np.float)
+    aseg_smooth = scipy.ndimage.gaussian_filter(aseg, sigma=1)
+    verts_vox, faces, _, _ = measure.marching_cubes(aseg_smooth, 100)
+    # Doesn't seem to fix the normals directions that should be out...
+    faces = measure.correct_mesh_orientation(aseg_smooth, verts_vox, faces)
+    verts = utils.apply_trans(t1_header.get_vox2ras_tkr(), verts_vox)
 
 def get_vert_labels(verbose=True):
     """Load the freesurfer vertex labels."""

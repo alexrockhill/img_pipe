@@ -151,13 +151,15 @@ def label(overwrite=False, verbose=True):
         raise ValueError('img_pipe.label has already been run and '
                          'overwrite=False')
 
-    # TO DO:
-    # - try aseg2srf for all the unique labels in an aseg
-    # for plotting all rois
-    # - figure out how to morph points to a common atlas (mri_vol2vol?)
-
+    # get the names of the numbered regions
+    number_dict = get_fs_labels()
     # make gyri labels
     for atlas, seg in ATLAS_DICT.items():
+        aseg = load_image_data('mri', f'{seg}+aseg.mgz', 'img_pipe.recon')
+        roi_idxs = np.unique(aseg[aseg > 0]).astype(int)  # > 0 == no unknown
+
+        rois = 
+
         for hemi in ('lh', 'rh'):
             if verbose:
                 print(f'Making {atlas} labels for {hemi}')
@@ -184,7 +186,7 @@ def label(overwrite=False, verbose=True):
                      ribbon_fnames[hemi]])
 
     # make subcortical labels
-    surf_dir = check_dir(op.join(base_path, 'surf'), 'img_pipe.recon-all')
+    surf_dir = check_dir(op.join(base_path, 'surf'), 'img_pipe.recon')
     # get the names of the numbered regions
     number_dict = get_fs_labels()
 

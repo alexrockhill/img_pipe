@@ -4,20 +4,19 @@
 # License: BSD (3-clause)
 import os
 import os.path as op
-import scipy.io
 
 import numpy as np
 
-import scipy
 from scipy.ndimage import binary_closing
 
 from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
-                             CMAP, SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
+                             SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
 from img_pipe.utils import (check_fs_vars, check_dir,
                             get_fs_labels, get_fs_colors,
                             load_electrode_names, load_electrodes,
-                            save_electrodes, load_image_data)
+                            save_electrodes, load_image_data,
+                            get_vox_to_ras, coord_trans)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -49,8 +48,8 @@ NORM = mpl.colors.Normalize(vmin=0, vmax=MAX_N_GROUPS)
 
 
 class ROI:
-    def __init__(self, name, color=None, opacity=1.0,
-                 rep='surface', template=None):
+    def __init__(self, name, color=None, opacity=1.0, atlas='desikan-killiany',
+                 template=None, representation=None):
         """Class defining a region of interest (ROI) mesh.
 
         This could be, for example, a mesh for the left hippocampus,
@@ -65,11 +64,14 @@ class ROI:
             Tuple for the ROI's color where each value is between 0.0 and 1.0.
         opacity: float (between 0.0 and 1.0)
             opacity of the mesh, between 0.0 and 1.0
-        rep: {'surface', 'wireframe'}
-            surface representation type
+        atlas: str
+            The atlas parcellation; 'desikan-killiany', 'DKT' or 'destrieux'.
         template: str
             Name of the template to use if plotting electrodes on an
-            atlas brain. e.g. 'cvs_avg35_inMNI152'
+            atlas brain. e.g. 'cvs_avg35_inMNI152'.
+        representation: str
+            The representation of the volume in 3D plotting; 'surface' or
+            'wireframe'. The default is 'surface'.
 
         Attributes
         ----------
@@ -82,40 +84,62 @@ class ROI:
         base_path = check_fs_vars()
         number_dict = get_fs_labels()
         color_dict = get_fs_colors()
-        surf_dir = (check_dir(op.join(base_path, 'surf'), 'recon')
-                    if template is None else
-                    check_dir(op.join(os.environ['FREESURFER_HOME'],
-                                      'subjects', template)))
 
-        if name not in number_dict and name not in CORTICAL_SURFACES:
-            raise ValueError(f'Name {name} not recongized')
-        # change number label to name
+        # handle number indexed names
         if isinstance(name, int):
+            if name not in number_dict:
+                raise ValueError(f'Name {name} not recognized')
             name = number_dict[name]
+        if name in CORTICAL_SURFACES:
+            if template is None:
+                roi_dir = check_dir(op.join(base_path, 'surf'),
+                                    'img_pipe.recon')
+            else:
+                roi_dir = check_dir(op.join(os.environ['FREESURFER_HOME'],
+                                            'subjects', template, 'surf'),
+                                    instructions='Check your freesurfer '
+                                                 'installation')
+            name = CORTICAL_SURFACES[name]
+        else:
+            if template is None:
+                roi_dir = check_dir(op.join(base_path, 'label', atlas),
+                                    'img_pipe.label')
+            else:
+                roi_dir = check_dir(op.join(os.environ['FREESURFER_HOME'],
+                                            'subjects', template, 'label',
+                                            atlas), 'img_pipe.warp')
+            if name not in os.listdir(roi_dir):
+                raise ValueError(f'Name {name} not recongized')
+            # change number label to name
+            if isinstance(name, int):
+                name = number_dict[name]
         self.name = name
-        self.vert, self.tri = mne.read_surface()
+        self.vert, self.tri = mne.read_surface(op.join(roi_dir, name))
         if color is None:
-            self.color = ((c / 255 for c in color_dict[name])
-                          if name in color_dict else (0.8,) * 3)
+            self.color = tuple((c / 255 for c in color_dict[name])
+                               if name in color_dict else (0.8,) * 3)
+        else:
+            self.color = color
         self.opacity = opacity
-        self.rep = rep
+        self.representation = \
+            'surface' if representation is None else representation
 
 
 def get_rois(group='all', opacity=1.0, representation='surface'):
-    """ Get the subcortial regions of interest
+    """Get the subcortial regions of interest
 
     Parameters
     ----------
-    group : str
-        'all' for pial and subcortial structures
-        'pial' for just pial surfaces
-        'subcortical' for just subcortical structures
-        'inflated' for left and right inflated
-        'white' for left and right white matter
-    opacity : float (between 0.0 and 1.0)
-        opacity of the mesh, between 0.0 and 1.0
-    representation : {'surface', 'wireframe'}
-        surface representation type
+    group: str
+        - 'all' for pial and subcortial structures
+        - 'pial' for just pial surfaces
+        - 'subcortical' for just subcortical structures
+        - 'inflated' for left and right inflated
+        - 'white' for left and right white matter
+    opacity: float
+        The opacity of the mesh, between 0.0 and 1.0.
+    rep: str
+        The representation type of the 3D mesh; 'surface' or 'wireframe'.
     """
     if group in ('all', 'pial', 'inflated', 'white'):
         name = 'Pial' if group == 'all' else group.capitalize()
@@ -123,8 +147,9 @@ def get_rois(group='all', opacity=1.0, representation='surface'):
                       representation=representation)
                   for hemi in ('Left', 'Right')]
     if group in ('all', 'subcortical'):
-        subcortical = [ROI(idx, opacity=opacity, representation=representation)
-                       for idx in SUBCORTICAL_INDICES]
+        subcortical = \
+            [ROI(idx, opacity=opacity, representation=representation)
+             for idx in SUBCORTICAL_INDICES]
     if group == 'all':
         return cortex + subcortical
     elif group == 'subcortical':
@@ -144,8 +169,8 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
     ----------
     rois: list
         List of roi objects created like so:
-        hipp_roi = ROI(name='Left-Hippocampus', color=(0.5,0.1,0.8)))
-        See `FreeSurferColorLUT.txt` for available ROI names.
+        hipp_roi = ROI(name='Left-Hippocampus', color=(0.5, 0.1, 0.8)))
+        See :func:`img_pipe.list_rois` for available ROI names.
         Defaults to [ROI('Left-Pial'), ROI('Right-Pial')]
     picks: list
         If None, all electrodes are plotted else only picks are plotted.
@@ -171,14 +196,13 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
 
     Example
     -------
-    >>> from img_pipe import roi, plot_brain
-    >>> pial = ROI('pial', (0.6, 0.3, 0.6), 0.1, 'wireframe', True),
-    >>> hipp = ROI('Left-Hippocampus', (0.5, 0.1, 0.8), 1.0, 'surface', True)
+    >>> from img_pipe import ROI, plot_brain
+    >>> pial = ROI('Left-Pial', (0.6, 0.3, 0.6), opacity=0.1,
+    >>>            representation='wireframe')
+    >>> hipp = ROI('Left-Hippocampus', (0.5, 0.1, 0.8), opacity=1.0)
     >>> plot_brain(rois=[pial, hipp])
     """
-    base_path = check_fs_vars()
     elec_matrix = load_electrodes()
-
     if elec_matrix:
         vmin = min([elec[3] for elec in elec_matrix.values()])
         vmax = max([elec[3] for elec in elec_matrix.values()])
@@ -186,31 +210,24 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
         vmin, vmax = 0
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
     cmap = cm.ScalarMappable(norm=norm, cmap=cmap)
-
     if picks is not None:
         elec_matrix = {ch: elec_matrix[ch] for ch in picks
                        if ch in elec_matrix}
-
     if rois is None:
         rois = get_rois('pial')
-
     renderer = mne.viz.backends.renderer.create_3d_figure(
         size=(1200, 900), bgcolor='w', scene=False)
     mne.viz.set_3d_view(figure=renderer.figure,
                         azimuth=azimuth, elevation=elevation)
-
     for elec_data in elec_matrix.values():
         x, y, z, group, _ = elec_data
         renderer.sphere(center=(x, y, z), color=cmap.to_rgba(group)[:3],
                         scale=elec_scale)
-
     for roi in rois:
         renderer.mesh(*roi.vert.T, triangles=roi.tri, color=roi.color,
-                      opacity=opacity)
-
+                      opacity=roi.opacity, representation=roi.representation)
     if show:
         mlab.show()
-
     return renderer.figure
 
 
@@ -307,6 +324,7 @@ class ElectrodePicker(QMainWindow):
         # load imaging data
         self.base_path = check_fs_vars()
         self.load_image_data()
+        self.vox_to_ras, self.ras_to_vox = get_vox_to_ras()
 
         # initialize electrode data
         self.elec_index = 0
@@ -1110,10 +1128,14 @@ class ElectrodePicker(QMainWindow):
         elec : np.array
             RAS coordinate of the requested slice coordinate
         """
-        return (np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
-                          self.images['cursor'][(0, 0)].get_xdata()[0],
-                          self.images['cursor2'][(0, 0)].get_ydata()[0]]
-                         ) - VOXEL_SIZES // 2)
+        return coord_trans(self.vox_to_ras, np.array(
+            [self.images['cursor'][(0, 1)].get_xdata()[0],
+             self.images['cursor'][(0, 0)].get_xdata()[0],
+             self.images['cursor2'][(0, 0)].get_ydata()[0]]))
+        '''(np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
+                      self.images['cursor'][(0, 0)].get_xdata()[0],
+                      self.images['cursor2'][(0, 0)].get_ydata()[0]]
+                     ) - VOXEL_SIZES // 2)'''
 
     def RAS_to_cursors(self, name=None):
         """Convert acpc-zero-centered RAS to slice indices.
@@ -1123,25 +1145,13 @@ class ElectrodePicker(QMainWindow):
             The slice coordinates of the given RAS data
         """
         name = self.get_current_elec(name=name)
-        return np.array(self.elec_matrix[name][:3]) + VOXEL_SIZES // 2
+        return coord_trans(self.ras_to_vox,
+                           np.array(self.elec_matrix[name][:3]))
 
     def launch_3D_viewer(self):
         """Launch 3D viewer to visualize electrodes."""
         # Get appropriate hemisphere
         plot_brain(get_rois(), opacity=0.3)
-
-        # Plot the electrodes we have so far
-        coords = list()
-        colors = list()
-        names = list()
-        for name in self.elec_matrix:
-            R, A, S, group, _ = self.elec_matrix[name]
-            coords.append([R, A, S])
-            colors.append(cm.ScalarMappable(
-                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3])
-            names.append(name)
-        add_electrodes(np.array(coords), color=np.array(colors),
-                       msize=4, labels=names)
 
 
 def launch_electrode_picker():

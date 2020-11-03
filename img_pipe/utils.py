@@ -8,13 +8,14 @@ import os.path as op
 import numpy as np
 
 import scipy
+from skimage import measure
 import nibabel as nib
 import mne
 
 from img_pipe.config import VOXEL_SIZES, CORTICAL_SURFACES
 
 
-def list_rois(atlas=None, template=None):
+def list_rois(atlas='desikan-killiany', template=None):
     """Lists the regions of interest available for plotting.
 
     Parameters
@@ -30,9 +31,14 @@ def list_rois(atlas=None, template=None):
 
     """
     base_path = check_fs_vars()
-    surf_dir = check_dir(op.join(base_path, 'surf'), 'recon')
-    return CORTICAL_SURFACES + [f for f in os.listdir(surf_dir)
-                                if f.split('.')[0] == 'sc']
+    if template is None:
+        label_dir = check_dir(op.join(base_path, 'label', atlas),
+                              'img_pipe.label')
+    else:
+        label_dir = check_dir(op.join(
+            os.environ['FREESURFER_HOME'], 'subjects', template, 'label',
+            atlas), 'img_pipe.warp')
+    return list(CORTICAL_SURFACES.keys()) + os.listdir(label_dir)
 
 
 def export_labels(overwrite=False, verbose=True):
@@ -198,9 +204,7 @@ def load_image_data(dirname, basename, function='img_pipe.recon',
         img = nib.freesurfer.load(fname)
     else:
         img = nib.load(fname)
-    codes = nib.orientations.axcodes2ornt(
-        nib.orientations.aff2axcodes(img.affine))
-    img_data = nib.orientations.apply_orientation(img.get_fdata(), codes)
+    img_data = img.get_fdata()
     if not np.array_equal(np.array(img_data.shape, dtype=int), VOXEL_SIZES):
         raise ValueError(f'MRI dimensions found {img_data.shape} '
                          f'expected dimensions were {VOXEL_SIZES}, '
@@ -208,22 +212,44 @@ def load_image_data(dirname, basename, function='img_pipe.recon',
     return img_data
 
 
-def aseg_to_surf(aseg, idx, T1):
+def get_vox_to_ras(inverse=False):
+    """Covert coordinates in voxel space to right-anterior-superior (RAS)."""
+    base_path = check_fs_vars()
+    t1w = nib.load(check_file(op.join(base_path, 'mri', 'T1.mgz'),
+                              'img_pipe.recon'))
+    t1w = nib.Nifti1Image(t1w.dataobj, t1w.affine)
+    t1w.header['xyzt_units'] = np.array(10, dtype='uint8')
+    t1_mgh = nib.MGHImage(t1w.dataobj, t1w.affine)
+    vox_to_ras = t1_mgh.header.get_vox2ras_tkr()
+    ras_to_vox = scipy.linalg.inv(vox_to_ras)
+    return vox_to_ras, ras_to_vox
+
+
+def coord_trans(trans, coords):
+    """Use a transform to change coordinate spaces."""
+    return mne.transforms.apply_trans(trans, coords, move=True)
+
+
+def aseg_to_surf(out_fname, aseg, idx, trans, sigma=1, verbose=True):
     """Creates a mesh surface from the voxel segementation data.
 
     Adapted from https://github.com/mmvt/mmvt/blob/master/src/
     misc/create_subcortical_surf.py
     """
-    aseg = aseg.copy()
-    aseg = np.where(aseg == idx, 10, 255)
-    aseg[aseg != idx] = 255
-    aseg[aseg == idx] = 10
-    aseg = np.array(aseg, dtype=np.float)
-    aseg_smooth = scipy.ndimage.gaussian_filter(aseg, sigma=1)
-    verts_vox, faces, _, _ = measure.marching_cubes(aseg_smooth, 100)
-    # Doesn't seem to fix the normals directions that should be out...
-    faces = measure.correct_mesh_orientation(aseg_smooth, verts_vox, faces)
-    verts = utils.apply_trans(t1_header.get_vox2ras_tkr(), verts_vox)
+    img = np.where(aseg == idx, 10, 255).astype(float)
+    img_smooth = scipy.ndimage.gaussian_filter(img, sigma=sigma)
+    if img_smooth.min() > 100:
+        if verbose:
+            print(f'{out_fname} volume too small with {sigma} smoothing, '
+                  'if you need this area, decrease sigma')
+        return
+    # find a surface less than level 100 with the area of interest at 10
+    # and the background at 255
+    vert, tri, _, _ = measure.marching_cubes(img_smooth, level=100)
+    # voxels to ras coordinates
+    vert = mne.transforms.apply_trans(trans, vert, move=True)
+    nib.freesurfer.io.write_geometry(out_fname, vert, tri)
+
 
 def get_vert_labels(verbose=True):
     """Load the freesurfer vertex labels."""
@@ -316,12 +342,3 @@ def get_fs_colors():
                 _, name, r, g, b, _ = line.split()
                 color_dict[name] = (int(r), int(g), int(b))
     return color_dict
-
-
-def surf_name(name):
-    """Match naming conventions for surf files."""
-    name = name.replace('Left-', 'lh.').replace('Right-', 'rh.')
-    name = name.replace('ctx_lh_', 'lh.ctx.').replace('ctx_rh_', 'rh.ctx.')
-    name = name.replace('wm_lh_', 'lh.wm.').replace('wm_rh_', 'rh.wm.')
-    name = name.replace('ctx-', 'ctx.').replace('-', '_').lower()
-    return name

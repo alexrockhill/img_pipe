@@ -25,7 +25,7 @@ setup(name='img_pipe',
       version=version,
       download_url='https://github.com/ChangLabUcsf/img_pipe.git',
       long_description=open('README.md').read(),
-      python_requires='~=3.5',
+      python_requires='~=3.7',
       packages=find_packages(),
       platforms='any',
       classifiers=[

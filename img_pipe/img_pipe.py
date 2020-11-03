@@ -14,13 +14,14 @@ import os.path as op
 from subprocess import run
 from shutil import copyfile
 import numpy as np
+from tqdm import tqdm
 
 from img_pipe.config import (SUBCORTICAL_INDICES, ATLAS_DICT, VOXEL_SIZES,
                              TEMPLATES)
-from img_pipe.utils import (check_file, check_dir, make_dir, check_fs_vars,
-                            get_ieeg_fnames, get_fs_labels, srf2surf,
-                            surf_name, load_image_data, load_electrodes,
-                            save_electrodes)
+from img_pipe.utils import (check_file, make_dir, check_fs_vars,
+                            get_ieeg_fnames, get_fs_labels, aseg_to_surf,
+                            load_image_data, load_electrodes,
+                            save_electrodes, get_vox_to_ras)
 
 
 def check_pipeline():
@@ -131,7 +132,7 @@ def plot_pial(verbose=True):
             '-no-isrunning'.format(os.environ['SUBJECT']).split(' '))
 
 
-def label(overwrite=False, verbose=True):
+def label(atlas=None, sigma=1, overwrite=False, verbose=True):
     """Create gyri, subcortical and pial labels.
 
     See `aseg2srf.sh`; the indices in `SUBCORTICAL_INDICES`
@@ -140,9 +141,15 @@ def label(overwrite=False, verbose=True):
 
     Parameters
     ----------
-    overwrite : bool
+    atlas: str
+        The segementation atlas to use; 'desikan-killiany', 'DKT' or
+        'destrieux'. If none is specified, all are computed. Specifying only
+        one can save time.
+    sigma: float
+        The amount of smoothing of the volumes created from the segmentation.
+    overwrite: bool
         Whether to overwrite the target filepath
-    verbose : bool
+    verbose: bool
         Whether to print text updating on the status of the function
     """
     base_path = check_fs_vars()
@@ -152,70 +159,38 @@ def label(overwrite=False, verbose=True):
                          'overwrite=False')
 
     # get the names of the numbered regions
+    if atlas is None:
+        atlas_dict = ATLAS_DICT
+    else:
+        if atlas not in ATLAS_DICT:
+            raise ValueError(f'Atlas {atlas} not recognized, options are '
+                             '`{}`'.format('`, `'.join(ATLAS_DICT.keys())))
+        atlas_dict = {atlas: ATLAS_DICT[atlas]}
     number_dict = get_fs_labels()
+    vox_to_ras, _ = get_vox_to_ras()
     # make gyri labels
-    for atlas, seg in ATLAS_DICT.items():
+    for atlas, seg in atlas_dict.items():
         aseg = load_image_data('mri', f'{seg}+aseg.mgz', 'img_pipe.recon')
         roi_idxs = np.unique(aseg[aseg > 0]).astype(int)  # > 0 == no unknown
-
-        rois = 
-
-        for hemi in ('lh', 'rh'):
-            if verbose:
-                print(f'Making {atlas} labels for {hemi}')
-            label_dir = make_dir(op.join(base_path, 'label', atlas))
-            # make labels
-            run(['mri_annotation2label', '--annotation', seg,
-                 '--subject', os.environ['SUBJECT'], '--hemi', hemi,
-                 '--surface', 'pial', '--outdir', label_dir])
-            vol_dir = make_dir(op.join(base_path, 'label', f'{atlas}_vol'))
-            tmp_dir = make_dir(op.join(base_path, 'label', f'{atlas}_tmp'))
-            for label in os.listdir(label_dir):
-                # make volume
-                vol_fname = op.join(tmp_dir, f'{label}.mgz')
-                filled_fname = op.join(tmp_dir, f'filled_{label}.mgz')
-                cropped_fname = op.join(vol_dir, f'{label}.mgz')
-                run(['mri_label2vol', '--label', op.join(label_dir, label),
-                     '--subject', os.environ['SUBJECT'], '--hemi', hemi,
-                     '--identity', '--temp', T1_fname, '--o', vol_fname])
-                # fill volume
-                run(['mri_binarize', '--dilate', '1', '--erode', '1',
-                     '--i', vol_fname, '--o', filled_fname, '--min', '1'])
-                # crop volume with ribbon
-                run(['mris_calc', '-o', cropped_fname, filled_fname, 'mul',
-                     ribbon_fnames[hemi]])
-
-    # make subcortical labels
-    surf_dir = check_dir(op.join(base_path, 'surf'), 'img_pipe.recon')
-    # get the names of the numbered regions
-    number_dict = get_fs_labels()
-
-    # tessellate all subjects freesurfer subcortical segmentations
-    if verbose:
-        print('Tesselating freesurfer subcortical segmentations '
-              'from aseg using aseg2srf...')
-    if run([op.join(op.dirname(__file__), 'aseg2srf.sh'), '-s',
-            os.environ['SUBJECT'], '-l',
-            ' '.join([str(i) for i in SUBCORTICAL_INDICES])]).returncode:
-        raise RuntimeError('error in aseg2srf.sh')
-
-    ascii_dir = check_dir(op.join(base_path, 'ascii'),
-                          instructions='aseg2srf error check with developers')
-
-    if verbose:
-        print('Converting all ascii segmentations surface geometry')
-    for i in SUBCORTICAL_INDICES:
-        fname = check_file(op.join(ascii_dir, 'aseg_{:03d}.srf'.format(i)),
-                           instructions='`aseg2surf` error, please report')
-        out_fname = op.join(surf_dir, f'sc.{surf_name(number_dict[i])}')
-        srf2surf(fname, out_fname)
-
-    # filled pial surfaces
+        assert all([idx in roi_idxs for idx in SUBCORTICAL_INDICES])
+        if verbose:
+            print(f'Making {atlas} volumes from segmentation for '
+                  '{}'.format(', '.join([number_dict[idx]
+                                         for idx in roi_idxs])))
+        label_dir = make_dir(op.join(base_path, 'label', atlas))
+        for idx in tqdm(roi_idxs):
+            out_fname = op.join(label_dir, number_dict[idx])
+            if op.isfile(out_fname) and not overwrite:
+                print(f'{out_fname} already exists, skipping')
+            else:
+                aseg_to_surf(out_fname, aseg, idx, trans=vox_to_ras,
+                             sigma=sigma, verbose=verbose)
+    # make filled pial surfaces
     for hemi in ('lh', 'rh'):
         if verbose:
             print(f'Filling pial surface for {hemi}')
         pial_fill = op.join(base_path, 'surf', f'{hemi}.pial.filled.mgz')
-        if op.isfile(pial_fill):
+        if op.isfile(pial_fill) and not overwrite:
             print(f'Filled pial surface already exists for {hemi}')
         else:
             pial_surf = op.join(base_path, 'surf', f'{hemi}.pial')

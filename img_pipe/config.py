@@ -6,10 +6,19 @@
 import numpy as np
 
 VOXEL_SIZES = np.array([256, 256, 256])
+IMG_RANGES = [[0, VOXEL_SIZES[1], 0, VOXEL_SIZES[2]],
+              [0, VOXEL_SIZES[0], 0, VOXEL_SIZES[2]],
+              [0, VOXEL_SIZES[0], 0, VOXEL_SIZES[1]]]
+IMG_LABELS = [['Inferior', 'Posterior'],
+              ['Inferior', 'Left'],
+              ['Posterior', 'Left']]
 ELEC_PLOT_SIZE = np.array([1024, 1024])
 ZOOM_STEP_SIZE = 5
 CT_MIN_VAL = 1000
-MAX_N_GROUPS = 17
+MAX_N_GROUPS = 25
+# use the 9 colors in set1 for electrodes
+CMAP = 'Set1'
+N_UNIQUE_COLORS = 9
 
 ATLAS_DICT = {'desikan-killiany': 'aparc',
               'DKT': 'aparc.DKTatlas',

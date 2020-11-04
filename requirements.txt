@@ -10,3 +10,4 @@ nipy>=0.4.0
 PyMCubes>=0.0.6
 matplotlib
 pyqt5
+tqdm

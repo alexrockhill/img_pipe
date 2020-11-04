@@ -6,17 +6,17 @@ import os
 import os.path as op
 
 import numpy as np
-
 from scipy.ndimage import binary_closing
 
-from img_pipe.config import (VOXEL_SIZES, CT_MIN_VAL, MAX_N_GROUPS,
+from img_pipe.config import (VOXEL_SIZES, IMG_RANGES, IMG_LABELS,
+                             CT_MIN_VAL, MAX_N_GROUPS, N_UNIQUE_COLORS, CMAP,
                              SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
 from img_pipe.utils import (check_fs_vars, check_dir,
                             get_fs_labels, get_fs_colors,
                             load_electrode_names, load_electrodes,
                             save_electrodes, load_image_data,
-                            get_vox_to_ras, coord_trans)
+                            get_vox_to_ras, apply_trans)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -28,23 +28,20 @@ from matplotlib.widgets import Slider, Button  # noqa
 from PyQt5 import QtCore, QtGui, Qt  # noqa
 from PyQt5.QtCore import pyqtSlot  # noqa
 from PyQt5.QtWidgets import (QApplication, QMainWindow,  # noqa
-                             QVBoxLayout, QHBoxLayout, QLabel,  # noqa
-                             QInputDialog, QMessageBox, QWidget,  # noqa
+                             QVBoxLayout, QHBoxLayout, QLabel,
+                             QInputDialog, QMessageBox, QWidget,
                              QListView, QSlider, QPushButton,
-                             QComboBox, QPlainTextEdit)  # noqa
+                             QComboBox, QPlainTextEdit)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg  # noqa
 
 import mayavi  # noqa
 from mayavi import mlab  # noqa
 
 import mne  # noqa
-from mne.viz import ClickableImage  # noqa
 
-ELECTRODE_COLORS = mcolors.LinearSegmentedColormap.from_list(
-    'elec_colors', np.vstack(
-        (cm.Set1(np.linspace(0., 1, MAX_N_GROUPS // 2 + 1 - MAX_N_GROUPS % 2)),
-         cm.Set2(np.linspace(0., 1, MAX_N_GROUPS // 2)))))
-NORM = mpl.colors.Normalize(vmin=0, vmax=MAX_N_GROUPS)
+SCALAR_MAP = cm.ScalarMappable(
+    norm=mcolors.Normalize(vmin=0, vmax=N_UNIQUE_COLORS - 1), cmap=CMAP)
+UNIQUE_COLORS = [SCALAR_MAP.to_rgba(i)[:3] for i in range(N_UNIQUE_COLORS)]
 
 
 class ROI:
@@ -247,7 +244,7 @@ class ComboBox(QComboBox):
 class SlicePlots(FigureCanvasQTAgg):
     """Initializes figure in pyqt for slice plots."""
 
-    def __init__(self, parent=None, width=16, height=10, dpi=300):
+    def __init__(self, parent=None, width=24, height=16, dpi=300):
         self.fig, self.axes = plt.subplots(2, 3, figsize=(width, height),
                                            dpi=dpi)
         super(SlicePlots, self).__init__(self.fig)
@@ -324,7 +321,6 @@ class ElectrodePicker(QMainWindow):
         # load imaging data
         self.base_path = check_fs_vars()
         self.load_image_data()
-        self.vox_to_ras, self.ras_to_vox = get_vox_to_ras()
 
         # initialize electrode data
         self.elec_index = 0
@@ -373,17 +369,15 @@ class ElectrodePicker(QMainWindow):
             self.move_cursors_to_pos()
 
     def load_image_data(self):
-        # Specified resolution freesurfer uses, images must be
-        # This resolution so we can plot them overlaid
-        vx, vy, vz = VOXEL_SIZES
-
         # prepare MRI data
-        self.img_data = load_image_data('mri', 'brain.mgz')
+        self.img_data = load_image_data('mri', 'brain.mgz', 'img_pipe.recon',
+                                        reorient=True)  # convert to ras
         self.mri_min = self.img_data.min()
         self.mri_max = self.img_data.max()
 
         # ready ct
-        self.ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR')
+        self.ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR',
+                                       reorient=True)  # convert to ras)
         self.ct_min = np.nanmin(self.ct_data)
         self.ct_max = np.nanmax(self.ct_data)
 
@@ -391,11 +385,105 @@ class ElectrodePicker(QMainWindow):
         self.pial_data = dict()
         for hemi in ('lh', 'rh'):
             self.pial_data[hemi] = load_image_data(
-                'surf', f'{hemi}.pial.filled.mgz', 'label')
+                'surf', f'{hemi}.pial.filled.mgz', 'label', reorient=True)
             self.pial_data[hemi] = binary_closing(self.pial_data[hemi])
 
         # This is the current slice for indexing (as integers for indexing)
-        self.current_slice = np.array([vx / 2, vy / 2, vz / 2], dtype=np.int)
+        self.current_slice = VOXEL_SIZES // 2
+
+    def make_elec_image(self, axis):
+        """Make electrode data higher resolution so it looks better."""
+        elec_image = np.zeros(ELEC_PLOT_SIZE) + np.nan
+        vx, vy, vz = VOXEL_SIZES
+
+        def color_elec_radius(elec_image, xf, yf, group):
+            '''Take the fraction across each dimension of the RAS
+               coordinates converted to xyz and put a circle in that
+               position in this larger resolution image.'''
+            ex, ey = np.round(np.array([xf, yf]) * ELEC_PLOT_SIZE).astype(int)
+            for i in range(-self.elec_radius, self.elec_radius + 1):
+                for j in range(-self.elec_radius, self.elec_radius + 1):
+                    if (i**2 + j**2)**0.5 < self.elec_radius:
+                        # negative y because y axis is inverted
+                        elec_image[-(ey + i), ex + j] = group
+            return elec_image
+
+        for name in self.elec_matrix:
+            # move from middle-centered (half coords positive, half negative)
+            # to bottom-left corner centered (all coords positive).
+            xyz = self.RAS_to_cursors(name)
+            # check if closest to that voxel
+            if np.round(xyz[axis]).astype(int) == self.current_slice[axis]:
+                x, y, z = xyz
+                if axis == 0:
+                    elec_image = color_elec_radius(
+                        elec_image, y / vy, z / vz,
+                        self.elec_matrix[name][3])  # group
+                elif axis == 1:
+                    elec_image = color_elec_radius(
+                        elec_image, x / vx, z / vx,
+                        self.elec_matrix[name][3])  # group
+                elif axis == 2:
+                    elec_image = color_elec_radius(
+                        elec_image, x / vx, y / vy,
+                        self.elec_matrix[name][3])  # group
+        return elec_image
+
+    def make_slice_plots(self):
+        self.plt = SlicePlots(self)
+        # Plot sagittal (0), coronal (1) or axial (2) view
+        self.images = dict(mri=list(), ct=dict(), elec=dict(),
+                           pial=dict(lh=list(), rh=list()),
+                           cursor=dict(), cursor2=dict())
+        for axis in range(3):
+            img_data = np.take(self.img_data, self.current_slice[axis],
+                               axis=axis).T
+            self.images['mri'].append(self.plt.axes[0, axis].imshow(
+                img_data, cmap=cm.gray, aspect='auto'))
+            ct_data = np.take(self.ct_data, self.current_slice[axis],
+                              axis=axis).T
+            self.images['ct'][(0, axis)] = self.plt.axes[0, axis].imshow(
+                ct_data, cmap=cm.hot, aspect='auto', alpha=0.5,
+                vmin=CT_MIN_VAL, vmax=np.nanmax(self.ct_data))
+            self.images['ct'][(1, axis)] = self.plt.axes[1, axis].imshow(
+                ct_data, cmap=cm.gray, aspect='auto')
+            for hemi in ('lh', 'rh'):
+                pial_data = np.take(self.pial_data[hemi],
+                                    self.current_slice[axis],
+                                    axis=axis).T
+                self.images['pial'][hemi].append(
+                    self.plt.axes[0, axis].contour(
+                        pial_data, linewidths=0.5, colors='y'))
+            for axis2 in range(2):
+                self.images['elec'][(axis2, axis)] = \
+                    self.plt.axes[axis2, axis].imshow(
+                    self.make_elec_image(axis), cmap=CMAP,
+                    aspect='auto', extent=IMG_RANGES[axis],
+                    alpha=1, vmin=0, vmax=N_UNIQUE_COLORS)
+                self.images['cursor'][(axis2, axis)] = \
+                    self.plt.axes[axis2, axis].plot(
+                    (self.current_slice[1], self.current_slice[1]),
+                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
+                self.images['cursor2'][(axis2, axis)] = \
+                    self.plt.axes[axis2, axis].plot(
+                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
+                self.plt.axes[axis2, axis].set_facecolor('k')
+                # clean up excess plot text, invert
+                self.plt.axes[axis2, axis].invert_yaxis()
+                self.plt.axes[axis2, axis].set_xticks([])
+                self.plt.axes[axis2, axis].set_yticks([])
+                # label axes
+                self.plt.axes[axis2, axis].set_xlabel(IMG_LABELS[axis][0],
+                                                      fontsize=4)
+                self.plt.axes[axis2, axis].set_ylabel(IMG_LABELS[axis][1],
+                                                      fontsize=4)
+                self.plt.axes[axis2, axis].axis(IMG_RANGES[axis])
+        self.plt.fig.suptitle('', fontsize=14)
+        self.plt.fig.tight_layout()
+        self.plt.fig.subplots_adjust(left=0.03, bottom=0.07,
+                                     wspace=0.15, hspace=0.15)
+        self.plt.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.plt.fig.canvas.mpl_connect('button_release_event', self.on_click)
 
     def get_button_bar(self):
         button_hbox = QHBoxLayout()
@@ -443,10 +531,8 @@ class ElectrodePicker(QMainWindow):
 
         for i in range(MAX_N_GROUPS):
             self.group_selector.addItem(' ')
-            rgba = cm.ScalarMappable(
-                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(i)
             color = QtGui.QColor()
-            color.setRgb(*[c * 255 for c in rgba])
+            color.setRgb(*UNIQUE_COLORS[i % N_UNIQUE_COLORS])
             brush = QtGui.QBrush(color)
             brush.setStyle(QtCore.Qt.SolidPattern)
             group_model.setData(group_model.index(i + 1, 0),
@@ -513,108 +599,6 @@ class ElectrodePicker(QMainWindow):
         slider_hbox.addLayout(radius_slider_vbox)
         return slider_hbox
 
-    def make_elec_image(self, axis):
-        """Make electrode data higher resolution so it looks better."""
-        elec_image = np.zeros(ELEC_PLOT_SIZE) + np.nan
-        vx, vy, vz = VOXEL_SIZES
-
-        def color_elec_radius(elec_image, xf, yf, group):
-            '''Take the fraction across each dimension of the RAS
-               coordinates converted to xyz and put a circle in that
-               position in this larger resolution image.'''
-            ex, ey = np.round(np.array([xf, yf]) * ELEC_PLOT_SIZE).astype(int)
-            for i in range(-self.elec_radius, self.elec_radius + 1):
-                for j in range(-self.elec_radius, self.elec_radius + 1):
-                    if (i**2 + j**2)**0.5 < self.elec_radius:
-                        # negative y because y axis is inverted
-                        elec_image[-(ey + i), ex + j] = group
-            return elec_image
-
-        for name in self.elec_matrix:
-            # move from middle-centered (half coords positive, half negative)
-            # to bottom-left corner centered (all coords positive).
-            xyz = self.RAS_to_cursors(name)
-            # check if closest to that voxel
-            if np.round(xyz[axis]).astype(int) == self.current_slice[axis]:
-                x, y, z = xyz
-                if axis == 0:
-                    elec_image = color_elec_radius(
-                        elec_image, y / vy, z / vz,
-                        self.elec_matrix[name][3])  # group
-                elif axis == 1:
-                    elec_image = color_elec_radius(
-                        elec_image, x / vx, z / vx,
-                        self.elec_matrix[name][3])  # group
-                elif axis == 2:
-                    elec_image = color_elec_radius(
-                        elec_image, x / vx, y / vy,
-                        self.elec_matrix[name][3])  # group
-        return elec_image
-
-    def make_slice_plots(self):
-        self.plt = SlicePlots(self)
-        # Plot sagittal (0), coronal (1) or axial (2) view
-        self.images = dict(mri=list(), ct=dict(), elec=dict(),
-                           pial=dict(lh=list(), rh=list()),
-                           cursor=dict(), cursor2=dict())
-
-        vx, vy, vz = VOXEL_SIZES
-        im_ranges = [[0, vy, 0, vz],
-                     [0, vx, 0, vz],
-                     [0, vx, 0, vy]]
-        im_labels = [['Inferior', 'Posterior'],
-                     ['Inferior', 'Left'],
-                     ['Posterior', 'Left']]
-        for axis in range(3):
-            img_data = np.take(self.img_data, self.current_slice[axis],
-                               axis=axis).T
-            self.images['mri'].append(self.plt.axes[0, axis].imshow(
-                img_data, cmap=cm.gray, aspect='auto'))
-            ct_data = np.take(self.ct_data, self.current_slice[axis],
-                              axis=axis).T
-            self.images['ct'][(0, axis)] = self.plt.axes[0, axis].imshow(
-                ct_data, cmap=cm.hot, aspect='auto', alpha=0.5,
-                vmin=CT_MIN_VAL, vmax=np.nanmax(self.ct_data))
-            self.images['ct'][(1, axis)] = self.plt.axes[1, axis].imshow(
-                ct_data, cmap=cm.gray, aspect='auto')
-            for hemi in ('lh', 'rh'):
-                pial_data = np.take(self.pial_data[hemi],
-                                    self.current_slice[axis],
-                                    axis=axis).T
-                self.images['pial'][hemi].append(
-                    self.plt.axes[0, axis].contour(
-                        pial_data, linewidths=0.5, colors='y'))
-            for axis2 in range(2):
-                self.images['elec'][(axis2, axis)] = \
-                    self.plt.axes[axis2, axis].imshow(
-                    self.make_elec_image(axis), cmap=ELECTRODE_COLORS,
-                    aspect='auto', extent=im_ranges[axis],
-                    alpha=1, vmin=0, vmax=MAX_N_GROUPS)
-                self.images['cursor'][(axis2, axis)] = \
-                    self.plt.axes[axis2, axis].plot(
-                    (self.current_slice[1], self.current_slice[1]),
-                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
-                self.images['cursor2'][(axis2, axis)] = \
-                    self.plt.axes[axis2, axis].plot(
-                    (0, VOXEL_SIZES[axis]), color=[0, 1, 0], linewidth=0.25)[0]
-                self.plt.axes[axis2, axis].set_facecolor('k')
-
-                self.plt.axes[axis2, axis].invert_yaxis()
-                self.plt.axes[axis2, axis].set_xticks([])
-                self.plt.axes[axis2, axis].set_yticks([])
-
-                self.plt.axes[axis2, axis].set_xlabel(im_labels[axis][0],
-                                                      fontsize=4)
-                self.plt.axes[axis2, axis].set_ylabel(im_labels[axis][1],
-                                                      fontsize=4)
-                self.plt.axes[axis2, axis].axis(im_ranges[axis])
-        self.plt.fig.suptitle('', fontsize=14)
-        self.plt.fig.tight_layout()
-        self.plt.fig.subplots_adjust(left=0.03, bottom=0.07,
-                                     wspace=0.15, hspace=0.15)
-        self.plt.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
-        self.plt.fig.canvas.mpl_connect('button_release_event', self.on_click)
-
     def set_elec_names(self):
         self.elec_list_model = QtGui.QStandardItemModel(self.elec_list)
         for name in self.elec_names:
@@ -637,9 +621,8 @@ class ElectrodePicker(QMainWindow):
         self.color_group_selector(group)
 
     def color_group_selector(self, group):
-        rgb = cm.ScalarMappable(
-            norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3]
-        rgb = (255 * np.array(rgb)).round().astype(int)
+        rgb = (255 * np.array(UNIQUE_COLORS[group % N_UNIQUE_COLORS])
+               ).round().astype(int)
         self.group_selector.setStyleSheet(
             'background-color: rgb({:d},{:d},{:d})'.format(*rgb))
 
@@ -769,9 +752,8 @@ class ElectrodePicker(QMainWindow):
         if not clear:
             # we need the normalized color map
             group = self.elec_matrix[name][3]
-            rgb = cm.ScalarMappable(
-                norm=NORM, cmap=ELECTRODE_COLORS).to_rgba(group)[:3]
-            color.setRgb(*[c * 255 for c in rgb])
+            color.setRgb(*[c * 255 for c in
+                           UNIQUE_COLORS[group % N_UNIQUE_COLORS]])
         brush = QtGui.QBrush(color)
         brush.setStyle(QtCore.Qt.SolidPattern)
         self.elec_list_model.setData(
@@ -1128,14 +1110,10 @@ class ElectrodePicker(QMainWindow):
         elec : np.array
             RAS coordinate of the requested slice coordinate
         """
-        return coord_trans(self.vox_to_ras, np.array(
-            [self.images['cursor'][(0, 1)].get_xdata()[0],
-             self.images['cursor'][(0, 0)].get_xdata()[0],
-             self.images['cursor2'][(0, 0)].get_ydata()[0]]))
-        '''(np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
-                      self.images['cursor'][(0, 0)].get_xdata()[0],
-                      self.images['cursor2'][(0, 0)].get_ydata()[0]]
-                     ) - VOXEL_SIZES // 2)'''
+        return (np.array([self.images['cursor'][(0, 1)].get_xdata()[0],
+                          self.images['cursor'][(0, 0)].get_xdata()[0],
+                          self.images['cursor2'][(0, 0)].get_ydata()[0]]
+                         ) - VOXEL_SIZES // 2)
 
     def RAS_to_cursors(self, name=None):
         """Convert acpc-zero-centered RAS to slice indices.
@@ -1145,8 +1123,7 @@ class ElectrodePicker(QMainWindow):
             The slice coordinates of the given RAS data
         """
         name = self.get_current_elec(name=name)
-        return coord_trans(self.ras_to_vox,
-                           np.array(self.elec_matrix[name][:3]))
+        return np.array(self.elec_matrix[name][:3]) + VOXEL_SIZES // 2
 
     def launch_3D_viewer(self):
         """Launch 3D viewer to visualize electrodes."""

@@ -193,7 +193,7 @@ def save_electrodes(elec_matrix, verbose=True):
 
 
 def load_image_data(dirname, basename, function='img_pipe.recon',
-                    verbose=True):
+                    reorient=False, verbose=True):
     """Load data from a 3D image file (e.g. CT, MR)."""
     if verbose:
         print(f'Loading {basename}')
@@ -204,7 +204,12 @@ def load_image_data(dirname, basename, function='img_pipe.recon',
         img = nib.freesurfer.load(fname)
     else:
         img = nib.load(fname)
-    img_data = img.get_fdata()
+    if reorient:
+        img_data = nib.orientations.apply_orientation(
+            img.get_fdata(), nib.orientations.axcodes2ornt(
+                nib.orientations.aff2axcodes(img.affine)))
+    else:
+        img_data = img.get_fdata()
     if not np.array_equal(np.array(img_data.shape, dtype=int), VOXEL_SIZES):
         raise ValueError(f'MRI dimensions found {img_data.shape} '
                          f'expected dimensions were {VOXEL_SIZES}, '
@@ -225,9 +230,9 @@ def get_vox_to_ras(inverse=False):
     return vox_to_ras, ras_to_vox
 
 
-def coord_trans(trans, coords):
+def apply_trans(trans, data):
     """Use a transform to change coordinate spaces."""
-    return mne.transforms.apply_trans(trans, coords, move=True)
+    return mne.transforms.apply_trans(trans, data, move=True)
 
 
 def aseg_to_surf(out_fname, aseg, idx, trans, sigma=1, verbose=True):

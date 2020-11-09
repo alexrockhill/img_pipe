@@ -65,7 +65,7 @@ def export_labels(overwrite=False, verbose=True):
             if op.isfile(out_fname) and not overwrite:
                 raise ValueError(f'File {out_fname} exists and '
                                  'overwrite is False')
-            save2mat(op.join(surf_dir, f'{hemi}.{mesh_name}'), out_fname)
+            save_to_mat(op.join(surf_dir, f'{hemi}.{mesh_name}'), out_fname)
 
 
 def check_file(my_file, function=None, instructions=None):
@@ -178,6 +178,76 @@ def load_electrodes(verbose=True):
     return elec_matrix
 
 
+def point_to_polar(x, y, z):
+    """Convert a point to zero-origin polar coordinates."""
+    r = np.sqrt(x**2 + y**2 + z**2)
+    phi = np.arctan2(y, x)
+    theta = np.arccos(z / r)
+    return r, phi, theta
+
+
+def polar_to_point(r, phi, theta):
+    """Convert polar coordinates to a 3D point."""
+    x = r * np.sin(theta) * np.cos(phi)
+    y = r * np.sin(theta) * np.sin(phi)
+    z = r * np.cos(theta)
+    return x, y, z
+# assert polar_to_point(*point_to_polar(*loc2 - loc)) + loc == loc2
+
+
+def img_correlation(loc, template, img):
+    """Compute the correlation of a template with an image at a location."""
+    loc = np.round(loc).astype(int)
+    for i, c, s in zip(range(img.ndim), loc, template.shape):
+        if c - s // 2 < 0 or c + s // 2 + s % 2 >= img.shape[i]:
+            pass  # return 0  # no out of bounds comparisons
+        img = \
+            img[(slice(None),) * i + (slice(c - s // 2, c + s // 2 + s % 2),)]
+    return np.correlate(img.flatten(), template.flatten())
+
+
+def gauss3D(amp, x0, y0, z0, sigma_x, sigma_y, sigma_z):
+    return lambda x, y, z: amp * np.exp((-(x - x0) ** 2) / 2 * sigma_x**2)
+
+
+def make_sphere(radius, size):
+    img = np.zeros((size,) * 3)
+    indices = np.arange(-(size // 2), size // 2 + 1)
+    if size % 2 == 0:
+        indices = indices[indices != 0]
+    dists = 0
+    for i in range(img.ndim):
+        dists = dists + indices.reshape(indices.shape + (1,) * i) ** 2
+    dists = np.sqrt(dists)
+    assert dists.shape == (size,) * img.ndim
+    mask = (dists <= radius)
+    assert mask.shape == (size,) * img.ndim
+    img[mask] = 1 - (dists[mask] / dists[mask].max())
+    return img
+
+
+def get_radius(img, coords, r, r2=None):
+    """Get the values within a radius of the ND image."""
+    assert coords.size == img.ndim
+    remainders = coords % 1
+    rr = np.ceil(r).astype(int) + 1
+    indices = np.arange(-rr, rr + 1)
+    dists = 0
+    for i in range(img.ndim):
+        dists = dists + (indices + remainders[i]).reshape(
+            indices.shape + (1,) * i) ** 2
+    dists = np.sqrt(dists)
+    assert dists.shape == (rr * 2 + 1,) * img.ndim
+    mask = (dists <= r) if r2 is None else ((r <= dists) & (dists <= r2))
+    assert mask.shape == (rr * 2 + 1,) * img.ndim
+    for i, c in zip(range(img.ndim), coords):
+        in_bounds = ((indices + c) >= 0) & ((indices + c) < img.shape[i])
+        mask = np.take(mask, np.arange(mask.shape[i])[in_bounds], axis=i)
+        inds = indices[in_bounds] + int(c)
+        img = img[(slice(None),) * i + (slice(inds[0], inds[-1] + 1),)]
+    return img[mask]
+
+
 def save_electrodes(elec_matrix, verbose=True):
     """Save the location of the electrodes."""
     if verbose:
@@ -273,14 +343,17 @@ def get_vert_labels(verbose=True):
     return vert_labels
 
 
-def save2mat(fname, out_fname):
+def save_to_mat(fname, out_fname):
     """Take in a freesurfer surface and save it as a mat file."""
     vert, tri = nib.freesurfer.read_geometry(fname)
     scipy.io.savemat(out_fname, {'tri': tri, 'vert': vert})
 
 
-def srf2surf(fname, out_fname):
+def srf_to_surf(fname, out_fname):
     """Convert srf files to freesurfer surface files.
+
+    ..depreciated Uses brainder bash/freesurfer script to tesselate
+    surfaces, replaced by python marching cubes solution
 
     Parameters
     ----------

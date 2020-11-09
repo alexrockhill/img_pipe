@@ -12,11 +12,9 @@ from img_pipe.config import (VOXEL_SIZES, IMG_RANGES, IMG_LABELS,
                              CT_MIN_VAL, MAX_N_GROUPS, N_UNIQUE_COLORS, CMAP,
                              SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
-from img_pipe.utils import (check_fs_vars, check_dir,
-                            get_fs_labels, get_fs_colors,
-                            load_electrode_names, load_electrodes,
-                            save_electrodes, load_image_data,
-                            get_vox_to_ras, apply_trans)
+from img_pipe.utils import (check_fs_vars, check_dir, get_fs_labels,
+                            get_fs_colors, load_electrode_names,
+                            load_electrodes, save_electrodes, load_image_data)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -532,7 +530,8 @@ class ElectrodePicker(QMainWindow):
         for i in range(MAX_N_GROUPS):
             self.group_selector.addItem(' ')
             color = QtGui.QColor()
-            color.setRgb(*UNIQUE_COLORS[i % N_UNIQUE_COLORS])
+            color.setRgb(*(255 * np.array(UNIQUE_COLORS[i % N_UNIQUE_COLORS])
+                           ).round().astype(int))
             brush = QtGui.QBrush(color)
             brush.setStyle(QtCore.Qt.SolidPattern)
             group_model.setData(group_model.index(i + 1, 0),

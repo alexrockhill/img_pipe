@@ -270,7 +270,7 @@ def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
     save_image(reg_CT, out_fname)
 
 
-def mark_electrodes(verbose=True):
+def manual_mark_electrodes(verbose=True):
     """Manually identify electrode locations.
 
     Parameters
@@ -287,10 +287,10 @@ def mark_electrodes(verbose=True):
     launch_electrode_picker()
 
 
-def auto_mark_electrodes(size=2, size_std=1, spacing=5, spacing_std=3,
-                         viz_quartile=0.95, opacity=0.1, n_runs=2000,
-                         seed=11, electrode_template=None, verbose=True):
-    """Mostly automatically identify electrode positions (ok'd with GUI)
+def mark_electrodes(volume_min=3, volume_max=36, volume_thresh=0.5,
+                    spacing_min=3, spacing_max=7, intensity_min=0.65,
+                    opacity=0.1, verbose=True):
+    """Automatically identify electrode positions and assign with GUI
 
     For 10-20 stereoeeg electrodes with 4-16 contacts and standard spacing
     or one or two ECoG grids with ~40 contacts and standard spacing the
@@ -302,151 +302,62 @@ def auto_mark_electrodes(size=2, size_std=1, spacing=5, spacing_std=3,
     about the same size and have about the same spacing
     that lie on a line with >= 2 other contacts.
 
-    Step 1: maximize number of contacts, minimize variance in size,
-    minimize variance in spacing.
-    It's like a landscape with marbles falling into bright-spot valleys
-    while repelling each other
-    Step 2: remove contacts that are not on a line with other >= 2 others
-    Step 3: 3D gaussian fit to find center of the electrodes
-
-    1) Find light center-dark surround of different sizes with convolutions
-        Automate by matching number of areas with number of channels
-
-    TO DO: make version that works for oblong electrodes
-
-    Another idea:
-    Threshold CT at value, apply flood fill (scipy label), find similar
-    volumes, exclude if not on a line
-
-    Idea:
-    Make "dumbbells" of various sizes and spacings initialized randomly,
-    do gradient decent to find a local minimum. Count where they
-    optimize to the most weighted by fit and number of other electrodes on
-    a line.
-
-
     Parameters
     ----------
-    size: float
-        An initial guess for the size of the contacts in voxels.
-    size_std: float
-        The standard deviation that all the contact sizes should be within.
-    spacing: float
-        An inital guess for the size of the spacing between the contacts
-        in voxels.
-    spacing_std: float
-        The standard devation that all the spacing should be within.
-    n_runs: int
-        The number of optimizations with random initial position to run
-        in order to determine the positions of the contacts. Should be
-        ~10x the number of contacts. Increase if the algorithm fails.
-    viz_quartile: float
-        What quartile of the CT data to use to visualize the skull and
-        electrodes. If there is too much background, increase, if parts
-        of the skull or electrodes are missing, decrease.
+    volume_min: int
+        The minimum number of voxels within 'volume_thresh' proportion
+        of that peak to use. Increase if small artifactual point are being
+        found, decrease if small contacts are not being found.
+    volume_max: int
+        The minimum number of voxels within 'volume_thresh' proportion
+        of that peak to use. Increase if large contacts are not being
+        found, decrease if too many large artifacts are being found.
+    volume_thresh: float
+        The proportion of each peak to count as within the volume
+        of the contact.
+    spacing_min: float
+        The minimum amount of space between contacts to use (in voxels).
+        Increase if close clusters of artifactual points are being
+        included as devices, decrease if devices are not being connected.
+    spacing_max: float
+        The maximum amount of space between contacts to use (in voxels).
+        Increase if devices are not being connected, decrease if
+        devices are improperly connected to each other.
+    intensity_min: float
+        The proportion of the greatest intensity-point that the contact
+        maximum intensity voxel must be greater than.
     opacity: float
         The opacity of the CT data used to scaffold the visualization.
-    electrode_template: np.array
-        A 3-dimensional array of the shape of the electrodes. Default
-        is a sphere.
     verbose: bool
         Whether to print text updating on the status of the function.
 
     """
-    import scipy
-    import mne
-    from scipy.ndimage import label, generate_binary_structure, zoom
-    from skimage import measure, filters, feature
-    from img_pipe.utils import (get_radius, make_sphere, img_correlation,
-                                polar_to_point)
-    np.random.seed(seed)
-    threshold = 0.95
-    # load MRI and CT data
-    # img_data = load_image_data('mri', 'brain.mgz', verbose=verbose)
+    from skimage.feature import peak_local_max
+    from img_pipe.utils import peak_to_volume, get_devices
     ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR',
                               reorient=True, verbose=verbose)
-
-    if electrode_template is None:
-        electrode_template = make_sphere(size, spacing)
-    electrode_match = feature.match_template(ct_data, electrode_template,
-                                             pad_input=True)
-    renderer = mne.viz.backends.renderer.create_3d_figure(
-        size=(1200, 900), bgcolor='w', scene=False)
-    vert, tri, _, _ = measure.marching_cubes(electrode_match)
-    renderer.mesh(*vert.T, triangles=tri, color=(0.8,) * 3, opacity=0.1)
-
-    def error_fun(x):
-        """Checks correlalation at two points with the electrode template."""
-        x, y, z, r, phi, theta = x
-        loc0 = np.array([x, y, z])
-        loc1 = np.array(polar_to_point(r, phi, theta)) + loc0
-        return -img_correlation(loc0, electrode_template, ct_data) - \
-            img_correlation(loc1, electrode_template, ct_data)
-
-
-    b_ct_data = ct_data > np.quantile(ct_data.flatten(), threshold)
-    # flood fill features (generate_binary_structure includes diagonals)
-    labeled_ct, n_features = \
-        label(b_ct_data, structure=generate_binary_structure(3, 3))
-    labels, counts = np.unique(labeled_ct, return_counts=True)
-    my_labels = labels[(10 < counts) & (counts < ct_data.size / 100)]
-    renderer = mne.viz.backends.renderer.create_3d_figure(
-        size=(1200, 900), bgcolor='w', scene=False)
-    for my_label in my_labels:
-        vert, tri, _, _ = measure.marching_cubes(labeled_ct == my_label)
-        renderer.mesh(*vert.T, triangles=tri, color=(0.8,) * 3, opacity=0.1)
-
-    ct_shape = np.array(ct_data.shape)
-
     if verbose:
-        print('Using maching cubes to construct CT scaffolding')
-    vert, tri, _, _ = measure.marching_cubes(
-        ct_data, level=np.quantile(ct_data.flatten(), viz_quartile))
-    renderer = mne.viz.backends.renderer.create_3d_figure(
-        size=(1200, 900), bgcolor='w', scene=False)
-    renderer.mesh(*vert.T, triangles=tri, color=(0.8,) * 3, opacity=0.1)
-    renderer.sphere(center=loc, color='red', scale=5)
-
+        print('Finding local maxima on the CT...')
+    peaks = peak_local_max(
+        ct_data, threshold_abs=intensity_min * np.nanmax(ct_data))
     if verbose:
-        print('Using difference of guassians filter to find electrodes')
-    img = filters.difference_of_gaussians(ct_data, size0, spacing0)
-    ivert, itri, _, _ = measure.marching_cubes(
-        img, level=np.quantile(img.flatten(), viz_quartile))
-
+        print('Finding volumes around local maxima...')
+    volumes = [peak_to_volume(peak, ct_data, volume_max, volume_thresh)
+               for peak in peaks]
+    n_voxels = np.array([len(vol) for vol in volumes])
+    peaks = peaks[(n_voxels >= volume_min) & (n_voxels <= volume_max)]
+    volumes = [vol for i, vol in enumerate(volumes) if
+               len(vol) >= volume_min and len(vol) <= volume_max]
+    assert len(volumes) == peaks.shape[0]
     if verbose:
-        print('Finding local maxima on the CT')
-    peaks = feature.peak_local_max(ct_data)
+        print(f'{peaks.shape[0]} voxels are local peaks with '
+              f'volumes between {volume_min} and {volume_max}, '
+              f'thresholded for volume at {volume_thresh} of that peak value')
+        print('Determining devices from neighboring local maxima...')
+    devices, singles = get_devices(peaks, spacing_min, spacing_max,
+                                   volumes, ct_data)
     if verbose:
-        print('{:.3f} of the image are local peaks'.format(
-            peaks.shape[0] / ct_data.size))
-
-    locations = np.random.random((MAX_N_CONTACTS, 3)) * np.array(ct_data.shape)
-    booleans = np.zeros((MAX_N_CONTACTS))
-    # turn into an array for opimization
-    x0 = np.concatenate([[size0, spacing0], booleans, locations.flatten()])
-    if verbose:
-        print(f'Optimizing {x0.size} parameters to find the best electrode '
-              'locations')
-
-    def error_fun(x):
-        size, spacing = np.round(np.clip(x[:2], 0, ct_shape.max())).astype(int)
-        mask = x[2:MAX_N_CONTACTS + 2] >= 0
-        # mask locations by whether booleans are >= 0
-        locs = x[MAX_N_CONTACTS + 2:].reshape(MAX_N_CONTACTS, 3)[mask]
-        locs = locs % ct_shape  # no going out of bounds
-        # compute distance matrix
-        dist_mat = scipy.spatial.distance_matrix(locs, locs)
-        # +brightness size around loc and -brightness spacing  around loc
-        value_score = 0
-        for loc in locs:
-            value_score += get_radius(ct_data, loc, size).mean()
-            value_score -= get_radius(ct_data, loc, spacing, size).mean()
-        # maximize distance so we don't get all on top of each other
-        # maximize mask which is number of electrodes
-        # maximize the value near the point
-        # minimize the value around the point
-        # maximize the spacing
-        return spacing - value_score - dist_mat.mean() - mask.sum()
+        print(f'{len(devices)} devices found')
 
 
 def label_electrodes(atlas='desikan-killiany', picks=None,

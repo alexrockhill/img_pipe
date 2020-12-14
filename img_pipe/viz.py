@@ -1136,3 +1136,131 @@ def launch_electrode_picker():
     electrode_picker = ElectrodePicker()
     electrode_picker.show()
     app.exec_()
+
+
+class ElectrodeGUI(QMainWindow):
+    """Pick electrodes manually using a coregistered MRI and CT."""
+
+    def __init__(self, *args, **kwargs):
+        """ Initialize the electrode picker.
+
+        Images will be displayed using orientation information
+        obtained from the image header. Images will be resampled to dimensions
+        [256,256,256] for display.
+        We will also listen for keyboard and mouse events so the user can
+        interact with each of the subplot panels (zoom/pan) and
+        add/remove electrodes with a keystroke.
+
+        Parameters
+        ----------
+        verbose : bool
+            Whether to print text updating on the status of the function.
+
+        Attributes
+        ----------
+        img_data : np.array
+            Data from brain.mgz T1 MRI scan
+        ct_data : np.array
+            Data from rCT.nii registered CT scan
+        pial_data : np.array
+            Filled pial image
+        elec_data : np.array
+            Mask for the electrodes
+        bin_mat : array-like
+            Temporary mask for populating elec_data
+        device_idx : int
+            Index of current device that has been added
+        device_name : str
+            Name of current device
+        devices : list
+            List of devices (grids, strips, depths)
+        elec_idx_list : dict
+            Indexed by device_name, which number electrode we are on for
+            that particular device
+        elec_matrix : dict
+            Dictionary of electrode coordinates
+        elec_added : bool
+            Whether we're in an electrode added state
+        current_slice : array-like
+            Which 3D slice coordinate the user clicked
+        fig : figure window
+            The current figure window
+        im : np.array
+            Contains data for each axis with MRI data values.
+        cursor : array-like
+            Cross hair
+        cursor2 : array-like
+            Cross hair
+        ax : matplotlib.pyplot.axis
+            which of the axes we're on
+        contour : list of bool
+            Whether pial surface contour is displayed in each view
+        pial_surf_on : bool
+            Whether pial surface is visible or not
+        T1_on : bool
+            Whether T1 is visible or not
+        ct_slice : {'s','c','a'}
+            How to slice CT maximum intensity projection
+            (sagittal, coronal, or axial)
+        """
+        # initialize QMainWindow class
+        super(ElectrodePicker, self).__init__(*args, **kwargs)
+
+        # load imaging data
+        self.base_path = check_fs_vars()
+        self.load_image_data()
+
+        # initialize electrode data
+        self.elec_index = 0
+        self.elec_names = load_electrode_names()
+
+        self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
+        # add already marked electrodes if they exist
+        self.elec_matrix = load_electrodes()
+        for name in self.elec_matrix:
+            if name not in self.elec_names:
+                self.elec_names.append(name)
+
+        self.pial_surf_on = True  # Whether pial surface is visible or not
+        self.T1_on = True  # Whether T1 is visible or not
+
+        # GUI design
+        self.setWindowTitle('Electrode Picker')
+
+        self.make_slice_plots()
+
+        button_hbox = self.get_button_bar()
+        slider_hbox = self.get_slider_bar()
+
+        self.elec_list = QListView()
+        self.elec_list.setSelectionMode(Qt.QAbstractItemView.SingleSelection)
+        self.elec_list.setMinimumWidth(150)
+        self.set_elec_names()
+
+        main_hbox = QHBoxLayout()
+        main_hbox.addWidget(self.plt)
+        main_hbox.addWidget(self.elec_list)
+
+        vbox = QVBoxLayout()
+        vbox.addLayout(button_hbox)
+        vbox.addLayout(slider_hbox)
+        vbox.addLayout(main_hbox)
+
+        central_widget = QWidget()
+        central_widget.setLayout(vbox)
+        self.setCentralWidget(central_widget)
+
+        name = self.get_current_elec()
+        if name:
+            self.update_group_color()
+        if name in self.elec_matrix:
+            self.move_cursors_to_pos()
+
+
+
+def launch_electrode_gui():
+    """Wrapper for the ElcetrodePicker object."""
+    app = QApplication(['Electrode Localizer'])
+    electrode_picker = ElectrodePicker()
+    electrode_picker.show()
+    app.exec_()

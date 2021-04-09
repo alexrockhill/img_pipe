@@ -157,7 +157,21 @@ def load_electrode_names(verbose=True):
     return [ch for ch in raw.ch_names if ch not in ('Event', 'STI 014')]
 
 
-def load_electrodes(verbose=True):
+def save_electrodes(elec_matrix, atlas=None, verbose=True):
+    """Save the location of the electrodes."""
+    if verbose:
+        print('Saving electrode positions')
+    base_path = check_fs_vars()
+    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
+    with open(elec_fname, 'w') as fid:
+        fid.write('\t'.join(['name', 'R', 'A', 'S', 'device']) + '\n')
+        for name in elec_matrix:  # sort as given
+            x, y, z, device = elec_matrix[name]
+            fid.write('\t'.join(np.array(
+                [name, x, y, z, device]).astype(str)) + '\n')
+
+
+def load_electrodes(atlas=None, verbose=True):
     """Load the registered electrodes."""
     if verbose:
         print('Loading electrode matrix')
@@ -168,14 +182,31 @@ def load_electrodes(verbose=True):
         return elec_matrix
     with open(elec_fname, 'r') as fid:
         header = fid.readline()  # for header
-        assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S',
-                                               'group', 'label']
+        assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S', 'group']
         for line in fid:
-            name, R, A, S, group, label = line.rstrip().split('\t')
+            name, R, A, S, device = line.rstrip().split('\t')
             elec_data = np.array([R, A, S]).astype(float).tolist()
-            elec_data += [int(group), label]
-            elec_matrix[name] = elec_data
+            elec_matrix[name] = elec_data + [int(device)]
     return elec_matrix
+
+
+def find_begin_end_numbers(name):
+    """Finds numbers at the beginning or end of a string."""
+    name = list(name)
+    numbers = ''
+    while name[0].isdigit():
+        numbers += name.pop(0)
+    while name[-1].isdigit():
+        numbers = name.pop(-1) + numbers
+    return name, numbers
+
+
+def get_device_names(elec_names):
+    """Helper function to automatically parse electrode names into devices."""
+    devices = set()
+    for name in elec_names:
+        devices.add(find_begin_end_numbers(name)[0])
+    return devices
 
 
 def point_to_polar(x, y, z):
@@ -400,20 +431,6 @@ def get_radius(img, coords, r, r2=None):
         inds = indices[in_bounds] + int(c)
         img = img[(slice(None),) * i + (slice(inds[0], inds[-1] + 1),)]
     return img[mask]
-
-
-def save_electrodes(elec_matrix, verbose=True):
-    """Save the location of the electrodes."""
-    if verbose:
-        print('Saving electrode positions')
-    base_path = check_fs_vars()
-    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
-    with open(elec_fname, 'w') as fid:
-        fid.write('\t'.join(['name', 'R', 'A', 'S', 'group', 'label']) + '\n')
-        for name in elec_matrix:  # sort as given
-            x, y, z, group, label = elec_matrix[name]
-            fid.write('\t'.join(np.array(
-                [name, x, y, z, int(group), label]).astype(str)) + '\n')
 
 
 def load_image_data(dirname, basename, function='img_pipe.recon',

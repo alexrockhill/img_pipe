@@ -52,10 +52,12 @@ def check_pipeline():
     print_status('Put ieeg in ieeg/(name).(fif|edf|bdf|vhdr|set)',
                  get_ieeg_fnames(return_first=True, verbose=False))
     print_status('img_pipe.recon', op.join(base_path, 'mri', 'aseg.mgz'))
+    print_status('img_pipe.warp_to_template',
+                 op.join(base_path, 'cvs', 'nlalign-aseg.mgz'))
     print_status('img_pipe.label', op.join(base_path, 'surf',
                                            'lh.pial.filled.mgz'))
     print_status('img_pipe.coreg_CT_MR', op.join(base_path, 'CT', 'rCT.nii'))
-    print_status('img_pipe.(auto_)mark_electrodes',
+    print_status('img_pipe.mark_electrodes',
                  op.join(base_path, 'elecs', 'electrodes.tsv'))
     print_status('img_pipe.label_electrodes',
                  op.join(base_path, 'elecs', 'electrodes_labeled'))
@@ -96,6 +98,40 @@ def recon(verbose=True):
         print('Running recon all, this will take many hours')
     run('recon-all -s {} -sd {} -all'.format(
         os.environ['SUBJECT'], os.environ['SUBJECTS_DIR']).split(' '))
+
+
+def warp_to_template(template='cvs_avg35_inMNI152', n_jobs=1, verbose=True):
+    """Warps electrodes to a common atlas.
+
+    Parameters
+    ----------
+    template : str, optional
+        Which atlas brain to use. Must be one of ['V1_average',
+        'cvs_avg35', 'cvs_avg35_inMNI152', 'fsaverage',
+        'fsaverage3', 'fsaverage4', 'fsaverage5', 'fsaverage6',
+        'fsaverage_sym']
+    picks: list
+        An optional list of electrodes to name if you are using different
+        atlases for different groups.
+    n_jobs: int
+        The number of cores to use for parallel computing to speed up the
+        process.
+    verbose : bool
+        Whether to print text updating on the status of the function.
+
+    """
+    if template not in TEMPLATES:
+        raise ValueError(f'Template must be in {TEMPLATES}, got {template}')
+    if verbose:
+        print(f'Using {template} as the template for electrode warping')
+
+    if verbose:
+        print('Computing combined volumetric surface (cvs) registration '
+              'this will take many hours...')
+    run(['mri_cvs_register', '--mov', os.environ['SUBJECT'],
+         '--templatedir', op.join(os.environ['FREESURFER_HOME'],
+                                  'subjects'),
+         '--template', template, '--nocleanup', '--openmp', str(n_jobs)])
 
 
 def plot_pial(verbose=True):
@@ -287,77 +323,25 @@ def manual_mark_electrodes(verbose=True):
     launch_electrode_picker()
 
 
-def mark_electrodes(volume_min=3, volume_max=36, volume_thresh=0.5,
-                    spacing_min=3, spacing_max=7, intensity_min=0.65,
-                    opacity=0.1, verbose=True):
+def mark_electrodes(verbose=True):
     """Automatically identify electrode positions and assign with GUI
 
-    For 10-20 stereoeeg electrodes with 4-16 contacts and standard spacing
-    or one or two ECoG grids with ~40 contacts and standard spacing the
-    default arguments should work fine. If the number of contacts or spacing
-    is unlikely for a normal distribution with the given mean and standard
-    deviation, the parameters should be adjusted.
-
-    Contacts are bright spots with surrounding dark on the CT that are
-    about the same size and have about the same spacing
-    that lie on a line with >= 2 other contacts.
+    The default arguments were chosen to work for 10-20 stereoeeg
+    electrodes with 4-16 contacts (~3 mm diameter) and ~5 mm spacing
+    or one or two ECoG grids with ~40 contacts.
 
     Parameters
     ----------
-    volume_min: int
-        The minimum number of voxels within 'volume_thresh' proportion
-        of that peak to use. Increase if small artifactual point are being
-        found, decrease if small contacts are not being found.
-    volume_max: int
-        The minimum number of voxels within 'volume_thresh' proportion
-        of that peak to use. Increase if large contacts are not being
-        found, decrease if too many large artifacts are being found.
-    volume_thresh: float
-        The proportion of each peak to count as within the volume
-        of the contact.
-    spacing_min: float
-        The minimum amount of space between contacts to use (in voxels).
-        Increase if close clusters of artifactual points are being
-        included as devices, decrease if devices are not being connected.
-    spacing_max: float
-        The maximum amount of space between contacts to use (in voxels).
-        Increase if devices are not being connected, decrease if
-        devices are improperly connected to each other.
-    intensity_min: float
-        The proportion of the greatest intensity-point that the contact
-        maximum intensity voxel must be greater than.
-    opacity: float
-        The opacity of the CT data used to scaffold the visualization.
     verbose: bool
         Whether to print text updating on the status of the function.
 
     """
-    from skimage.feature import peak_local_max
-    from img_pipe.utils import peak_to_volume, get_devices
-    ct_data = load_image_data('CT', 'rCT.nii', 'coreg_CT_MR',
-                              reorient=True, verbose=verbose)
+    from img_pipe.viz import launch_electrode_gui
+    base_path = check_fs_vars()
+    make_dir(op.join(base_path, 'elecs'))
     if verbose:
-        print('Finding local maxima on the CT...')
-    peaks = peak_local_max(
-        ct_data, threshold_abs=intensity_min * np.nanmax(ct_data))
-    if verbose:
-        print('Finding volumes around local maxima...')
-    volumes = [peak_to_volume(peak, ct_data, volume_max, volume_thresh)
-               for peak in peaks]
-    n_voxels = np.array([len(vol) for vol in volumes])
-    peaks = peaks[(n_voxels >= volume_min) & (n_voxels <= volume_max)]
-    volumes = [vol for i, vol in enumerate(volumes) if
-               len(vol) >= volume_min and len(vol) <= volume_max]
-    assert len(volumes) == peaks.shape[0]
-    if verbose:
-        print(f'{peaks.shape[0]} voxels are local peaks with '
-              f'volumes between {volume_min} and {volume_max}, '
-              f'thresholded for volume at {volume_thresh} of that peak value')
-        print('Determining devices from neighboring local maxima...')
-    devices, singles = get_devices(peaks, spacing_min, spacing_max,
-                                   volumes, ct_data)
-    if verbose:
-        print(f'{len(devices)} devices found')
+        print('Launching electrode graphical user interface')
+    launch_electrode_gui()
 
 
 def label_electrodes(atlas='desikan-killiany', picks=None,
@@ -381,7 +365,6 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
         Whether to print text updating on the status of the function.
 
     """
-    base_path = check_fs_vars()
     if atlas not in ATLAS_DICT:
         raise ValueError('Atlas must be in {}, got {}'.format(
             list(ATLAS_DICT.keys()), atlas))
@@ -399,9 +382,7 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
                                  'and overwrite=False')
             vx, vy, vz = np.round([r, a, s]).astype(int) + VOXEL_SIZES // 2
             elec_matrix[name][4] = fs_labels[img_data[vx, vy, vz].astype(int)]
-    save_electrodes(elec_matrix, verbose=verbose)
-    with open(op.join(base_path, 'elec', 'electrodes_labeled'), 'w') as fid:
-        fid.write('True')  # create file to mark that labels are done
+    save_electrodes(elec_matrix, atlas=atlas, verbose=verbose)
 
 
 def warp(template='cvs_avg35_inMNI152', picks=None, n_jobs=1, overwrite=False,
@@ -441,7 +422,7 @@ def warp(template='cvs_avg35_inMNI152', picks=None, n_jobs=1, overwrite=False,
                          'overwrite is False')
     if 1:
         if verbose:
-            print('Computing combined volumetric surface (csv) registration '
+            print('Computing combined volumetric surface (cvs) registration '
                   'this may take some time...')
         run(['mri_cvs_register', '--mov', os.environ['SUBJECT'],
              '--templatedir', op.join(os.environ['FREESURFER_HOME'],

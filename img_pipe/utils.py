@@ -164,11 +164,11 @@ def save_electrodes(elec_matrix, atlas=None, verbose=True):
     base_path = check_fs_vars()
     elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
     with open(elec_fname, 'w') as fid:
-        fid.write('\t'.join(['name', 'R', 'A', 'S', 'device']) + '\n')
+        fid.write('\t'.join(['name', 'R', 'A', 'S', 'group', 'label']) + '\n')
         for name in elec_matrix:  # sort as given
-            x, y, z, device = elec_matrix[name]
+            x, y, z, device, label = elec_matrix[name]
             fid.write('\t'.join(np.array(
-                [name, x, y, z, device]).astype(str)) + '\n')
+                [name, x, y, z, device]).astype(str)) + f'\t{label}\n')
 
 
 def load_electrodes(atlas=None, verbose=True):
@@ -182,11 +182,12 @@ def load_electrodes(atlas=None, verbose=True):
         return elec_matrix
     with open(elec_fname, 'r') as fid:
         header = fid.readline()  # for header
-        assert header.rstrip().split('\t') == ['name', 'R', 'A', 'S', 'group']
+        assert header.rstrip().split('\t') == \
+            ['name', 'R', 'A', 'S', 'group', 'label']
         for line in fid:
-            name, R, A, S, device = line.rstrip().split('\t')
+            name, R, A, S, device, label = line.rstrip().split('\t')
             elec_data = np.array([R, A, S]).astype(float).tolist()
-            elec_matrix[name] = elec_data + [int(device)]
+            elec_matrix[name] = elec_data + [int(device), label]
     return elec_matrix
 
 

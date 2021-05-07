@@ -14,7 +14,8 @@ from img_pipe.config import (VOXEL_SIZES, IMG_RANGES, IMG_LABELS,
                              ELEC_PLOT_SIZE, CORTICAL_SURFACES)
 from img_pipe.utils import (check_fs_vars, check_dir, get_fs_labels,
                             get_fs_colors, load_electrode_names,
-                            load_electrodes, save_electrodes, load_image_data)
+                            load_electrodes, save_electrodes, load_image_data,
+                            get_device_names)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -222,6 +223,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
     return renderer.figure
 
 
+'''
 class ElectrodeGUI(QMainWindow):
     """Pick electrodes manually using a coregistered MRI and CT."""
 
@@ -298,7 +300,7 @@ class ElectrodeGUI(QMainWindow):
             self.move_cursors_to_pos()
 
     def get_devices(self):
-        devices = get_devices(self.elec_names)
+        devices = get_devices_names(self.elec_names)
 
 
 def launch_electrode_gui():
@@ -307,6 +309,7 @@ def launch_electrode_gui():
     electrode_gui = ElectrodeGUI()
     electrode_gui.show()
     app.exec_()
+'''
 
 
 class ComboBox(QComboBox):
@@ -788,7 +791,7 @@ class ElectrodePicker(QMainWindow):
             # we need the normalized color map
             group = self.elec_matrix[name][3]
             color.setRgb(*[c * 255 for c in
-                           UNIQUE_COLORS[group % N_COLORS]])
+                           UNIQUE_COLORS[int(group) % N_COLORS]])
         brush = QtGui.QBrush(color)
         brush.setStyle(QtCore.Qt.SolidPattern)
         self.elec_list_model.setData(
@@ -830,7 +833,7 @@ class ElectrodePicker(QMainWindow):
         name = self.get_current_elec()
         if name:
             self.elec_matrix[name] = \
-                np.append(self.cursors_to_RAS(), self.get_group(), -1)
+                self.cursors_to_RAS().tolist() + [self.get_group(), 'n/a']
             self.color_list_item()
             self.update_elec_images(draw=True)
             save_electrodes(self.elec_matrix)

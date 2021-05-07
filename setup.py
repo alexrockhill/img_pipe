@@ -16,8 +16,8 @@ if version is None:
 
 
 setup(name='img_pipe',
-      maintaier='Liberty Hamilton',
-      maintainer_email='libertyhamilton@gmail.com',
+      maintaier='Alex Rockhill',
+      maintainer_email='arockhill@mailbox.org',
       description='Image processing pipeline for localization and '
                   'identification of electrodes for electrocorticography',
       license='BSD (3-clause)',

@@ -795,10 +795,10 @@ class ElectrodePicker(QMainWindow):
         name = self.get_current_elec()
         if name:
             self.elec_matrix[name] = \
-                np.append(self.cursors_to_RAS(), self.get_group(), 'n/a')
+                np.append(self.cursors_to_RAS(), self.get_group(), -1)
             self.color_list_item()
             self.update_elec_images(draw=True)
-            save_electrodes()
+            save_electrodes(self.elec_matrix)
             self.next_elec()
 
     @pyqtSlot()
@@ -807,7 +807,7 @@ class ElectrodePicker(QMainWindow):
         if name in self.elec_matrix:
             self.color_list_item(clear=True)
             self.elec_matrix.pop(name)
-            save_electrodes()
+            save_electrodes(self.elec_matrix)
             self.update_elec_images(draw=True)
 
     def update_elec_images(self, axis_selected=None, draw=False):

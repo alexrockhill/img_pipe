@@ -11,11 +11,11 @@ from scipy.ndimage import binary_closing
 from img_pipe.config import (VOXEL_SIZES, IMG_RANGES, IMG_LABELS,
                              CT_MIN_VAL, MAX_N_GROUPS, UNIQUE_COLORS, N_COLORS,
                              SUBCORTICAL_INDICES, ZOOM_STEP_SIZE,
-                             ELEC_PLOT_SIZE, CORTICAL_SURFACES)
+                             ELEC_PLOT_SIZE, CORTICAL_SURFACES, ELECTRODE_CMAP)
 from img_pipe.utils import (check_fs_vars, check_dir, get_fs_labels,
                             get_fs_colors, load_electrode_names,
-                            load_electrodes, save_electrodes, load_image_data,
-                            get_device_names)
+                            load_electrodes, save_electrodes, load_image_data)
+#                            get_device_names)
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
@@ -430,17 +430,17 @@ class ElectrodePicker(QMainWindow):
 
     def make_elec_image(self, axis):
         """Make electrode data higher resolution so it looks better."""
-        elec_image = np.zeros(ELEC_PLOT_SIZE) + np.nan
+        elec_image = np.zeros(ELEC_PLOT_SIZE) * np.nan
         vx, vy, vz = VOXEL_SIZES
 
-        def color_elec_radius(elec_image, xf, yf, group):
+        def color_elec_radius(elec_image, xf, yf, group, radius):
             '''Take the fraction across each dimension of the RAS
                coordinates converted to xyz and put a circle in that
                position in this larger resolution image.'''
             ex, ey = np.round(np.array([xf, yf]) * ELEC_PLOT_SIZE).astype(int)
-            for i in range(-self.elec_radius, self.elec_radius + 1):
-                for j in range(-self.elec_radius, self.elec_radius + 1):
-                    if (i**2 + j**2)**0.5 < self.elec_radius:
+            for i in range(-radius, radius + 1):
+                for j in range(-radius, radius + 1):
+                    if (i**2 + j**2)**0.5 < radius:
                         # negative y because y axis is inverted
                         elec_image[-(ey + i), ex + j] = group
             return elec_image
@@ -450,20 +450,20 @@ class ElectrodePicker(QMainWindow):
             # to bottom-left corner centered (all coords positive).
             xyz = self.RAS_to_cursors(name)
             # check if closest to that voxel
-            if np.round(xyz[axis]).astype(int) == self.current_slice[axis]:
+            dist = np.round(xyz[axis]).astype(int) - self.current_slice[axis]
+            if abs(dist) < self.elec_radius:
                 x, y, z = xyz
+                group = self.elec_matrix[name][3]
+                r = self.elec_radius - np.round(abs(dist)).astype(int)
                 if axis == 0:
                     elec_image = color_elec_radius(
-                        elec_image, y / vy, z / vz,
-                        self.elec_matrix[name][3])  # group
+                        elec_image, y / vy, z / vz, group, r)
                 elif axis == 1:
                     elec_image = color_elec_radius(
-                        elec_image, x / vx, z / vx,
-                        self.elec_matrix[name][3])  # group
+                        elec_image, x / vx, z / vx, group, r)
                 elif axis == 2:
                     elec_image = color_elec_radius(
-                        elec_image, x / vx, y / vy,
-                        self.elec_matrix[name][3])  # group
+                        elec_image, x / vx, y / vy, group, r)
         return elec_image
 
     def make_slice_plots(self):
@@ -496,7 +496,7 @@ class ElectrodePicker(QMainWindow):
                     self.plt.axes[axis2, axis].imshow(
                     self.make_elec_image(axis),
                     aspect='auto', extent=IMG_RANGES[axis],
-                    alpha=1, vmin=0, vmax=N_COLORS)
+                    cmap=ELECTRODE_CMAP, alpha=1, vmin=0, vmax=N_COLORS)
                 self.images['cursor'][(axis2, axis)] = \
                     self.plt.axes[axis2, axis].plot(
                     (self.current_slice[1], self.current_slice[1]),

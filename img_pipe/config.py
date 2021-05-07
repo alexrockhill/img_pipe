@@ -4,6 +4,7 @@
 # License: BSD (3-clause)
 
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
 
 VOXEL_SIZES = np.array([256, 256, 256])
 IMG_RANGES = [[0, VOXEL_SIZES[1], 0, VOXEL_SIZES[2]],
@@ -25,6 +26,8 @@ UNIQUE_COLORS = [(0.1, 0.42, 0.43), (0.9, 0.34, 0.62), (0.47, 0.51, 0.3),
                  (0.59, 0.28, 0.74), (0.46, 0.19, 0.94), (0.37, 0.93, 0.7),
                  (0.56, 0.86, 0.55), (0.67, 0.69, 0.44)]
 N_COLORS = len(UNIQUE_COLORS)
+ELECTRODE_CMAP = LinearSegmentedColormap.from_list(
+    'elec_colors', UNIQUE_COLORS, N=N_COLORS)
 
 
 ATLAS_DICT = {'desikan-killiany': 'aparc',

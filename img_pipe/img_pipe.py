@@ -11,6 +11,7 @@
 
 import os
 import os.path as op
+import json
 from subprocess import run
 from shutil import copyfile
 import numpy as np
@@ -369,7 +370,7 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
         raise ValueError('Atlas must be in {}, got {}'.format(
             list(ATLAS_DICT.keys()), atlas))
     elec_matrix = load_electrodes(verbose=verbose)
-    fs_labels = get_fs_labels(verbose=verbose)
+    fs_labels = get_fs_labels()
     img_data = load_image_data('mri', ATLAS_DICT[atlas] + '+aseg.mgz',
                                verbose=verbose)
     if verbose:
@@ -377,11 +378,14 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
     for name in elec_matrix:
         if picks is None or name in picks:
             r, a, s, _, label = elec_matrix[name]
-            if label != 'n/a' and not overwrite:
-                raise ValueError(f'Label already assigned for {name}'
-                                 'and overwrite=False')
             vx, vy, vz = np.round([r, a, s]).astype(int) + VOXEL_SIZES // 2
-            elec_matrix[name][4] = fs_labels[img_data[vx, vy, vz].astype(int)]
+            this_label = fs_labels[img_data[vx, vy, vz].astype(int)]
+            label_dict = dict() if label == 'n/a' else json.loads(label)
+            if atlas in label_dict and not overwrite:
+                raise ValueError(f'{atlas} label already assigned for {name}'
+                                 f'overwrite=False')
+            label_dict[atlas] = this_label
+            elec_matrix[name][4] = json.dumps(label_dict)
     save_electrodes(elec_matrix, atlas=atlas, verbose=verbose)
 
 

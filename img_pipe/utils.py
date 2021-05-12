@@ -130,6 +130,10 @@ def load_raw(verbose=True):
     if verbose:
         print('Loading an electrophysiology file')
     fname = get_ieeg_fnames(return_first=True, verbose=verbose)
+    if not fname:
+        if verbose:
+            print('No ieeg raw file found')
+        return
     ext = op.splitext(fname)[-1]
     if ext == '.fif':
         raw = mne.io.read_raw_fif(fname, preload=False)
@@ -154,6 +158,8 @@ def load_electrode_names(verbose=True):
     if verbose:
         print('Loading electrode names')
     raw = load_raw(verbose=verbose)
+    if raw is None:
+        return list()
     return [ch for ch in raw.ch_names if ch not in ('Event', 'STI 014')]
 
 

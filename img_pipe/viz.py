@@ -359,14 +359,13 @@ class ElectrodePicker(QMainWindow):
         self.base_path = check_fs_vars()
         self.load_image_data()
 
+        self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
         # initialize electrode data
         self.elec_index = 0
-        self.elec_names = load_electrode_names()
-
-        self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
-        # add already marked electrodes if they exist
         self.elec_matrix = load_electrodes()
-        for name in self.elec_matrix:
+
+        self.elec_names = list(self.elec_matrix.keys())
+        for name in load_electrode_names():
             if name not in self.elec_names:
                 self.elec_names.append(name)
 

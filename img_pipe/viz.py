@@ -16,9 +16,9 @@ from img_pipe.utils import (check_fs_vars, check_dir, get_fs_labels,
                             get_fs_colors, load_electrode_names,
                             load_electrodes, save_electrodes, load_image_data)
 #                            get_device_names)
+import mne  # noqa
 
 import matplotlib as mpl
-mpl.use('Qt5Agg')
 import matplotlib.pyplot as plt  # noqa
 from matplotlib import cm  # noqa
 import matplotlib.colors as mcolors  # noqa
@@ -32,11 +32,6 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow,  # noqa
                              QListView, QSlider, QPushButton,
                              QComboBox, QPlainTextEdit)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg  # noqa
-
-import mayavi  # noqa
-from mayavi import mlab  # noqa
-
-import mne  # noqa
 
 
 class ROI:
@@ -219,7 +214,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
         renderer.mesh(*roi.vert.T, triangles=roi.tri, color=roi.color,
                       opacity=roi.opacity, representation=roi.representation)
     if show:
-        mlab.show()
+        renderer.show()
     return renderer.figure
 
 
@@ -354,6 +349,9 @@ class ElectrodePicker(QMainWindow):
         """
         # initialize QMainWindow class
         super(ElectrodePicker, self).__init__()
+
+        # change to correct backend
+        mpl.use('Qt5Agg')
 
         # load imaging data
         self.base_path = check_fs_vars()

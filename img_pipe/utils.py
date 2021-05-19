@@ -125,6 +125,33 @@ def get_ieeg_fnames(return_first=False, verbose=True):
         return ieeg_fnames
 
 
+def set_bipolar_ref(raw, verbose=True):
+    """Reference each electrode to its neighbor on the device."""
+    devices = get_device_names(raw.ch_names)
+    if not devices:
+        raise ValueError('Devices could not be parse, try renaming '
+                         'channels in the standard way e.g. LSTG2')
+    device_dict = {device: dict() for device in devices}
+    for ch in raw.ch_names:
+        device, number = find_begin_end_numbers(ch)
+        device_dict[device][number] = ch
+    raw.load_data()
+    drop_chs = list()
+    if verbose:
+        print('Re-referencing every channel to its neighbor')
+    for device in device_dict:
+        numbers = sorted(device_dict[device].keys())
+        drop_chs.append(device_dict[device][numbers[-1]])
+        for number in numbers[:-1]:  # must go in order for subtracting
+            ch = device_dict[device][number]
+            ref_ch = device_dict[device][numbers[numbers.index(number) + 1]]
+            raw._data[raw.ch_names.index(ch)] -= \
+                raw._data[raw.ch_names.index(ref_ch)]
+            raw.rename_channels({ch: f'{ch}-{ref_ch}'})
+    raw.drop_channels(drop_chs)
+    return raw
+
+
 def load_raw(verbose=True):
     """Load the intracranial electrophysiology data file."""
     if verbose:
@@ -163,7 +190,7 @@ def load_electrode_names(verbose=True):
     return [ch for ch in raw.ch_names if ch not in ('Event', 'STI 014')]
 
 
-def save_electrodes(elec_matrix, atlas=None, verbose=True):
+def save_electrodes(elec_matrix, verbose=True):
     """Save the location of the electrodes."""
     if verbose:
         print('Saving electrode positions')
@@ -177,7 +204,7 @@ def save_electrodes(elec_matrix, atlas=None, verbose=True):
                 [name, x, y, z, device]).astype(str)) + f'\t{label}\n')
 
 
-def load_electrodes(atlas=None, verbose=True):
+def load_electrodes(verbose=True):
     """Load the registered electrodes."""
     if verbose:
         print('Loading electrode matrix')
@@ -205,7 +232,7 @@ def find_begin_end_numbers(name):
         numbers += name.pop(0)
     while name[-1].isdigit():
         numbers = name.pop(-1) + numbers
-    return name, numbers
+    return ''.join(name), int(numbers) if numbers else None
 
 
 def get_device_names(elec_names):

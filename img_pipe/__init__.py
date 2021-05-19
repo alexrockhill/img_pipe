@@ -7,4 +7,5 @@ from img_pipe.img_pipe import (check_pipeline, recon, plot_pial, label,  # noqa
                                coreg_CT_MR, manual_mark_electrodes,
                                mark_electrodes, label_electrodes, warp)
 
-from img_pipe.viz import ROI, get_rois, plot_brain  # noqa
+# from img_pipe.viz import ROI, get_rois, plot_brain  # noqa
+from img_pipe import viz  # noqa

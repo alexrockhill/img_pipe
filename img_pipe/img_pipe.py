@@ -389,7 +389,7 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
     save_electrodes(elec_matrix, atlas=atlas, verbose=verbose)
 
 
-def warp(template='cvs_avg35_inMNI152', picks=None, n_jobs=1, overwrite=False,
+def warp(template='cvs_avg35_inMNI152', n_jobs=1, overwrite=False,
          verbose=True):
     """Warps electrodes to a common atlas.
 
@@ -400,9 +400,6 @@ def warp(template='cvs_avg35_inMNI152', picks=None, n_jobs=1, overwrite=False,
         'cvs_avg35', 'cvs_avg35_inMNI152', 'fsaverage',
         'fsaverage3', 'fsaverage4', 'fsaverage5', 'fsaverage6',
         'fsaverage_sym']
-    picks: list
-        An optional list of electrodes to name if you are using different
-        atlases for different groups.
     n_jobs: int
         The number of cores to use for parallel computing to speed up the
         process.
@@ -418,17 +415,34 @@ def warp(template='cvs_avg35_inMNI152', picks=None, n_jobs=1, overwrite=False,
         print(f'Using {template} as the template for electrode warping')
 
     base_path = check_fs_vars()
-    elec_matrix = load_electrodes(verbose=verbose)
-
     warped_fname = op.join(base_path, 'elecs', f'electrodes_{template}.tsv')
     if op.isfile(warped_fname) and not overwrite:
         raise ValueError(f'Electrodes are already warped to {template} and '
                          'overwrite is False')
-    if 1:
-        if verbose:
-            print('Computing combined volumetric surface (cvs) registration '
-                  'this may take some time...')
-        run(['mri_cvs_register', '--mov', os.environ['SUBJECT'],
-             '--templatedir', op.join(os.environ['FREESURFER_HOME'],
-                                      'subjects'),
-             '--template', template, '--nocleanup', '--openmp', str(n_jobs)])
+    morph_fname = check_file(
+        op.join(base_path, 'cvs',
+                f'combined_to{template}_elreg_afteraseg-norm.tm3d'),
+        instructions='Run `mri_cvs_register` to create it')
+    template_fname = check_file(
+        op.join(base_path, 'mri', 'brain.mgz'), 'recon-all')
+    elec_matrix = load_electrodes(verbose=verbose)
+    tmp_fname = op.join(base_path, 'cvs', 'tmp.txt')
+    with open(tmp_fname, 'w') as fid:
+        for name in elec_matrix:
+            r, a, s = elec_matrix[name][:3]
+            vx, vy, vz = np.array([r, a, s]) + VOXEL_SIZES // 2
+            fid.write(f'{vx}\t{vy}\t{vz}\n')
+    out_fname = op.join(base_path, 'cvs', 'out.txt')
+    run(f'applyMorph --template {template_fname} '
+        f'--transform {morph_fname} '
+        f'tract_point_list {tmp_fname} {out_fname} nearest', shell=True)
+    warped_elec_matrix = dict()
+    with open(out_fname, 'r') as fid:
+        for name in elec_matrix:
+            vx, vy, vz = [float(p) for p in
+                          fid.readline().rstrip().split()]
+            r, a, s = np.array([vx, vy, vz]) - VOXEL_SIZES // 2
+            warped_elec_matrix[name] = [r, a, s] + elec_matrix[name][3:]
+    save_electrodes(warped_elec_matrix, template=template)
+    os.remove(tmp_fname)
+    os.remove(out_fname)

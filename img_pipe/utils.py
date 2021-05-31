@@ -190,12 +190,14 @@ def load_electrode_names(verbose=True):
     return [ch for ch in raw.ch_names if ch not in ('Event', 'STI 014')]
 
 
-def save_electrodes(elec_matrix, verbose=True):
+def save_electrodes(elec_matrix, template=None, verbose=True):
     """Save the location of the electrodes."""
     if verbose:
         print('Saving electrode positions')
     base_path = check_fs_vars()
-    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
+    base_name = 'electrodes.tsv' if template is None else \
+        f'electrodes_{template}.tsv'
+    elec_fname = op.join(base_path, 'elecs', base_name)
     with open(elec_fname, 'w') as fid:
         fid.write('\t'.join(['name', 'R', 'A', 'S', 'group', 'label']) + '\n')
         for name in elec_matrix:  # sort as given
@@ -204,12 +206,14 @@ def save_electrodes(elec_matrix, verbose=True):
                 [name, x, y, z, device]).astype(str)) + f'\t{label}\n')
 
 
-def load_electrodes(verbose=True):
+def load_electrodes(template=None, verbose=True):
     """Load the registered electrodes."""
     if verbose:
         print('Loading electrode matrix')
     base_path = check_fs_vars()
-    elec_fname = op.join(base_path, 'elecs', 'electrodes.tsv')
+    base_name = 'electrodes.tsv' if template is None else \
+        f'electrodes_{template}.tsv'
+    elec_fname = op.join(base_path, 'elecs', base_name)
     elec_matrix = dict()
     if not op.isfile(elec_fname):
         return elec_matrix

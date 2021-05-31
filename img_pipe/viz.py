@@ -147,7 +147,7 @@ def get_rois(group='all', opacity=1.0, representation='surface'):
         raise ValueError(f'Unrecognized group {group}')
 
 
-def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
+def plot_brain(rois=None, picks=None, elec_scale=5, distance=500,
                azimuth=None, elevation=None, opacity=1.0, show=True,
                verbose=True):
     """Plots multiple meshes on one figure.
@@ -163,9 +163,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
     picks: list
         If None, all electrodes are plotted else only picks are plotted.
     elec_scale: float
-        How large to plot the electrodes (arbitrary units)
-    cmap: str
-        Which colormap to use.
+        How large to plot the electrodes (mm).
     azimuth: float
         Azimuth for brain view.
     elevation: float
@@ -191,11 +189,6 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
     >>> plot_brain(rois=[pial, hipp])
     """
     elec_matrix = load_electrodes()
-    if elec_matrix:
-        vmin = min([elec[3] for elec in elec_matrix.values()])
-        vmax = max([elec[3] for elec in elec_matrix.values()])
-    else:
-        vmin, vmax = 0
     if picks is not None:
         elec_matrix = {ch: elec_matrix[ch] for ch in picks
                        if ch in elec_matrix}

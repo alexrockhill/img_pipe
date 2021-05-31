@@ -147,8 +147,9 @@ def get_rois(group='all', opacity=1.0, representation='surface'):
         raise ValueError(f'Unrecognized group {group}')
 
 
-def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
-               elevation=None, opacity=1.0, show=True, verbose=True):
+def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
+               azimuth=None, elevation=None, opacity=1.0, show=True,
+               verbose=True):
     """Plots multiple meshes on one figure.
     Defaults to plotting both hemispheres of the pial surface.
 
@@ -204,7 +205,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', azimuth=None,
         rois = get_rois('pial')
     renderer = mne.viz.backends.renderer.create_3d_figure(
         size=(1200, 900), bgcolor='w', scene=False)
-    mne.viz.set_3d_view(figure=renderer.figure,
+    mne.viz.set_3d_view(figure=renderer.figure, distance=distance,
                         azimuth=azimuth, elevation=elevation)
     for elec_data in elec_matrix.values():
         x, y, z, group, _ = elec_data

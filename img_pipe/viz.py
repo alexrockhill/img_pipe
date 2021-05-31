@@ -207,8 +207,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
                         azimuth=azimuth, elevation=elevation)
     for elec_data in elec_matrix.values():
         x, y, z, group, _ = elec_data
-        renderer.sphere(center=(x, y, z),
-                        color=ELECTRODE_CMAP.to_rgba(group)[:3],
+        renderer.sphere(center=(x, y, z), color=ELECTRODE_CMAP(group)[:3],
                         scale=elec_scale)
     for roi in rois:
         renderer.mesh(*roi.vert.T, triangles=roi.tri, color=roi.color,

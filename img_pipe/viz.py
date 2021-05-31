@@ -196,8 +196,6 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
         vmax = max([elec[3] for elec in elec_matrix.values()])
     else:
         vmin, vmax = 0
-    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-    cmap = cm.ScalarMappable(norm=norm, cmap=cmap)
     if picks is not None:
         elec_matrix = {ch: elec_matrix[ch] for ch in picks
                        if ch in elec_matrix}
@@ -209,7 +207,8 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
                         azimuth=azimuth, elevation=elevation)
     for elec_data in elec_matrix.values():
         x, y, z, group, _ = elec_data
-        renderer.sphere(center=(x, y, z), color=cmap.to_rgba(group)[:3],
+        renderer.sphere(center=(x, y, z),
+                        color=ELECTRODE_CMAP.to_rgba(group)[:3],
                         scale=elec_scale)
     for roi in rois:
         renderer.mesh(*roi.vert.T, triangles=roi.tri, color=roi.color,

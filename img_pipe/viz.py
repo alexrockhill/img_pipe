@@ -202,7 +202,7 @@ def plot_brain(rois=None, picks=None, elec_scale=5, cmap='RdBu', distance=500,
         elec_matrix = {ch: elec_matrix[ch] for ch in picks
                        if ch in elec_matrix}
     if rois is None:
-        rois = get_rois('pial')
+        rois = get_rois('pial', opacity=opacity)
     renderer = mne.viz.backends.renderer.create_3d_figure(
         size=(1200, 900), bgcolor='w', scene=False)
     mne.viz.set_3d_view(figure=renderer.figure, distance=distance,

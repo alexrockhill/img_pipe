@@ -419,12 +419,17 @@ def warp(template='cvs_avg35_inMNI152', n_jobs=1, overwrite=False,
     if op.isfile(warped_fname) and not overwrite:
         raise ValueError(f'Electrodes are already warped to {template} and '
                          'overwrite is False')
+    check_file(
+        op.join(base_path, 'cvs', f'final_CVSmorphed_to{template}_aseg.mgz'),
+        instructions='Run `mri_cvs_register` to create it')
     morph_fname = check_file(
         op.join(base_path, 'cvs',
                 f'combined_to{template}_elreg_afteraseg-norm.tm3d'),
-        instructions='Run `mri_cvs_register` to create it')
+        instructions='Check `mri_cvs_register` for errors and '
+        'make sure to use the flag --nocleanup')
     template_fname = check_file(
-        op.join(base_path, 'mri', 'brain.mgz'), 'recon-all')
+        op.join(os.environ['FREESURFER_HOME'], 'subjects', template,
+                'mri', 'brain.mgz'), instructions='Check freesurfer install')
     elec_matrix = load_electrodes(verbose=verbose)
     tmp_fname = op.join(base_path, 'cvs', 'tmp.txt')
     with open(tmp_fname, 'w') as fid:

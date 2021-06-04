@@ -514,28 +514,49 @@ def apply_trans(trans, data):
     return mne.transforms.apply_trans(trans, data, move=True)
 
 
-def morph_elecs(elec_matrix, sub_brain, template_brain,
-                metric=None, level_iters=None, verbose=True):
+def morph_elecs(elec_matrix, sub_brain, template_brain, factors=None,
+                sigmas=None, metric=None, level_iters=None, verbose=True):
     """Performs the symmetric diffeomorphic registration to template space."""
-    from nipy import load_image
+    from dipy.align import (affine_registration, center_of_mass, translation,
+                            rigid, affine)
     from dipy.align.metrics import CCMetric
     from dipy.align.imwarp import SymmetricDiffeomorphicRegistration
 
-    moving = load_image(sub_brain)
-    static = load_image(template_brain)
+    sigmas = [3.0, 1.0, 0.0] if sigmas is None else sigmas
+    factors = [4, 2, 1] if factors is None else factors
+    level_iters = [10000, 1000, 100] if level_iters is None else level_iters
+    moving = nib.freesurfer.load(sub_brain)
+    static = nib.freesurfer.load(template_brain)
+    # convert electrode positions from surface RAS to voxels
+    elec_matrix = apply_trans(
+        np.linalg.inv(moving.header.get_vox2ras_tkr()), elec_matrix)
+    if verbose:
+        print('Performing affine registration for pre-alignment')
+    reg_img, reg_affine = affine_registration(
+        moving.get_fdata(),
+        static.get_fdata(),
+        moving_affine=moving.affine,
+        static_affine=static.affine,
+        nbins=32,
+        metric='MI',
+        pipeline=[center_of_mass, translation, rigid, affine],
+        level_iters=level_iters,
+        sigmas=sigmas,
+        factors=factors)
     # Compute registration
     metric = CCMetric(3) if metric is None else metric
-    level_iters = [10, 10, 5] if level_iters is None else level_iters
     sdr = SymmetricDiffeomorphicRegistration(metric, level_iters)
     if verbose:
         print('Optimizing symmetric diffeomorphic registration')
-    mapping = sdr.optimize(static.get_data(), moving.get_data(),
-                           static.affine, moving.affine)
+    mapping = sdr.optimize(static.get_fdata(), moving.get_fdata(),
+                           static.affine, moving.affine, reg_affine)
     if verbose:
         print('Applying mapping to electrode positions')
     for i, xyz in enumerate(elec_matrix):
         x, y, z = np.round(xyz).astype(int)
         elec_matrix[i] += mapping.forward[x, y, z]
+    # convert to static surface RAS
+    elec_matrix = apply_trans(static.header.get_vox2ras_tkr(), elec_matrix)
     return elec_matrix
 
 

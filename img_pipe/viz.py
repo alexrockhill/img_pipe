@@ -135,11 +135,12 @@ def get_rois(group='all', template=None, opacity=1.0,
     if group in ('all', 'pial', 'inflated', 'white'):
         name = 'Pial' if group == 'all' else group.capitalize()
         cortex = [ROI(f'{hemi}-{name}', opacity=opacity,
-                      representation=representation)
+                      representation=representation, template=template)
                   for hemi in ('Left', 'Right')]
     if group in ('all', 'subcortical'):
         subcortical = \
-            [ROI(idx, opacity=opacity, representation=representation)
+            [ROI(idx, opacity=opacity, representation=representation,
+                 template=template)
              for idx in SUBCORTICAL_INDICES]
     if group == 'all':
         return cortex + subcortical

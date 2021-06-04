@@ -101,7 +101,8 @@ def recon(verbose=True):
         os.environ['SUBJECT'], os.environ['SUBJECTS_DIR']).split(' '))
 
 
-def warp_to_template(template='cvs_avg35_inMNI152', n_jobs=1, verbose=True):
+def compute_warp_to_template(template='cvs_avg35_inMNI152', n_jobs=1,
+                             verbose=True):
     """Warps electrodes to a common atlas.
 
     Parameters
@@ -234,8 +235,8 @@ def label(atlas=None, sigma=1, overwrite=False, verbose=True):
             run(f'mris_fill -c -r 1 {pial_surf} {pial_fill}'.split(' '))
 
 
-def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
-                ftol=0.0001, overwrite=False, verbose=True):
+def reg_CT_to_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
+                 ftol=0.0001, overwrite=False, verbose=True):
     """Coregistrs the anatomical MR with the CT using nibabel.
 
     Parameters are arguments for
@@ -295,7 +296,7 @@ def coreg_CT_MR(smooth=0., reg_type='rigid', interp='pv', xtol=0.0001,
     # Compute registration
     ct_to_mri_reg = HistogramRegistration(ct_img, mri_img, similarity='nmi',
                                           smooth=smooth, interp=interp)
-    aff = ct_to_mri_reg.optimize(reg_type).as_affine()
+    aff = ct_to_mri_reg.optimize(reg_type, xtol=xtol, ftol=ftol).as_affine()
 
     ct_to_mri = AffineTransform(ct_img.coordmap.function_range,
                                 mri_img.coordmap.function_range, aff)
@@ -389,8 +390,9 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
     save_electrodes(elec_matrix, atlas=atlas, verbose=verbose)
 
 
-def warp(template='cvs_avg35_inMNI152', metric=None, level_iters=None,
-         n_jobs=1, overwrite=False, verbose=True):
+def warp(template='cvs_avg35_inMNI152', sigmas=None, factors=None,
+         metric=None, level_iters=None, n_jobs=1, overwrite=False,
+         verbose=True):
     """Warps electrodes to a common atlas using dipy's
     symmetric diffeometric registration (SDR)
 
@@ -401,6 +403,12 @@ def warp(template='cvs_avg35_inMNI152', metric=None, level_iters=None,
         'cvs_avg35', 'cvs_avg35_inMNI152', 'fsaverage',
         'fsaverage3', 'fsaverage4', 'fsaverage5', 'fsaverage6',
         'fsaverage_sym']
+    sigmas: list
+        The smoothing factor for each level of registration. Default
+        [3, 1, 0].
+    factors : list
+        The sampling factors of the image at each level of registration.
+        Default is [4, 2, 1].
     metric : `dipy.align.metrics` object
         The metric used to optimize symmetric diffeomorphic registration.
     level_iters : list
@@ -433,14 +441,14 @@ def warp(template='cvs_avg35_inMNI152', metric=None, level_iters=None,
     elec_matrix = np.zeros((len(elecs), 3))
     lookup = dict()
     for i, name in enumerate(elecs):
-        elec_matrix[i] = np.array(elecs[name][:3]) + VOXEL_SIZES // 2
+        elec_matrix[i] = np.array(elecs[name][:3])
         lookup[i] = name
     elec_matrix = morph_elecs(elec_matrix, sub_brain, template_brain,
                               metric=metric, level_iters=level_iters,
                               verbose=verbose)
     warped_elecs = dict()
     for i, xyz in enumerate(elec_matrix):
-        warped_elecs[lookup[i]] = list(xyz - VOXEL_SIZES // 2) + \
+        warped_elecs[lookup[i]] = list(xyz) + \
             elecs[lookup[i]][3:]
     save_electrodes(warped_elecs, template=template)
 

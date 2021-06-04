@@ -54,8 +54,8 @@ class ROI:
         atlas: str
             The atlas parcellation; 'desikan-killiany', 'DKT' or 'destrieux'.
         template: str
-            Name of the template to use if plotting electrodes on an
-            atlas brain. e.g. 'cvs_avg35_inMNI152'.
+            Name of the template to use if plotting electrodes on a
+            group template brain. e.g. 'cvs_avg35_inMNI152'.
         representation: str
             The representation of the volume in 3D plotting; 'surface' or
             'wireframe'. The default is 'surface'.
@@ -112,7 +112,8 @@ class ROI:
             'surface' if representation is None else representation
 
 
-def get_rois(group='all', opacity=1.0, representation='surface'):
+def get_rois(group='all', template=None, opacity=1.0,
+             representation='surface'):
     """Get the subcortial regions of interest
 
     Parameters
@@ -123,6 +124,9 @@ def get_rois(group='all', opacity=1.0, representation='surface'):
         - 'subcortical' for just subcortical structures
         - 'inflated' for left and right inflated
         - 'white' for left and right white matter
+    template: str
+        Name of the template to use if plotting electrodes on a
+        group template brain. e.g. 'cvs_avg35_inMNI152'.
     opacity: float
         The opacity of the mesh, between 0.0 and 1.0.
     rep: str
@@ -188,17 +192,16 @@ def plot_brain(rois=None, picks=None, elec_scale=5, distance=500,
     >>> hipp = ROI('Left-Hippocampus', (0.5, 0.1, 0.8), opacity=1.0)
     >>> plot_brain(rois=[pial, hipp])
     """
-    elec_matrix = load_electrodes()
+    elecs = load_electrodes()
     if picks is not None:
-        elec_matrix = {ch: elec_matrix[ch] for ch in picks
-                       if ch in elec_matrix}
+        elecs = {ch: elecs[ch] for ch in picks if ch in elecs}
     if rois is None:
         rois = get_rois('pial', opacity=opacity)
     renderer = mne.viz.backends.renderer.create_3d_figure(
         size=(1200, 900), bgcolor='w', scene=False)
     mne.viz.set_3d_view(figure=renderer.figure, distance=distance,
                         azimuth=azimuth, elevation=elevation)
-    for elec_data in elec_matrix.values():
+    for elec_data in elecs.values():
         x, y, z, group, _ = elec_data
         renderer.sphere(center=(x, y, z), color=ELECTRODE_CMAP(group)[:3],
                         scale=elec_scale)
@@ -249,8 +252,8 @@ class ElectrodeGUI(QMainWindow):
         self.elec_index = 0
 
         # add already marked electrodes if they exist
-        self.elec_matrix = load_electrodes()
-        for name in self.elec_matrix:
+        self.elecs = load_electrodes()
+        for name in self.elecs:
             if name not in self.elec_names:
                 self.elec_names.append(name)
 
@@ -283,7 +286,7 @@ class ElectrodeGUI(QMainWindow):
         name = self.get_current_elec()
         if name:
             self.update_group_color()
-        if name in self.elec_matrix:
+        if name in self.elecs:
             self.move_cursors_to_pos()
 
     def get_devices(self):
@@ -352,9 +355,9 @@ class ElectrodePicker(QMainWindow):
         self.elec_radius = int(np.mean(ELEC_PLOT_SIZE) // 100)
         # initialize electrode data
         self.elec_index = 0
-        self.elec_matrix = load_electrodes()
+        self.elecs = load_electrodes()
 
-        self.elec_names = list(self.elec_matrix.keys())
+        self.elec_names = list(self.elecs.keys())
         for name in load_electrode_names():
             if name not in self.elec_names:
                 self.elec_names.append(name)
@@ -391,7 +394,7 @@ class ElectrodePicker(QMainWindow):
         name = self.get_current_elec()
         if name:
             self.update_group_color()
-        if name in self.elec_matrix:
+        if name in self.elecs:
             self.move_cursors_to_pos()
 
     def load_image_data(self):
@@ -434,7 +437,7 @@ class ElectrodePicker(QMainWindow):
                         elec_image[-(ey + i), ex + j] = group
             return elec_image
 
-        for name in self.elec_matrix:
+        for name in self.elecs:
             # move from middle-centered (half coords positive, half negative)
             # to bottom-left corner centered (all coords positive).
             xyz = self.RAS_to_cursors(name)
@@ -442,7 +445,7 @@ class ElectrodePicker(QMainWindow):
             dist = np.round(xyz[axis]).astype(int) - self.current_slice[axis]
             if abs(dist) < self.elec_radius:
                 x, y, z = xyz
-                group = self.elec_matrix[name][3]
+                group = self.elecs[name][3]
                 r = self.elec_radius - np.round(abs(dist)).astype(int)
                 if axis == 0:
                     elec_image = color_elec_radius(
@@ -630,11 +633,11 @@ class ElectrodePicker(QMainWindow):
         self.elec_list_model = QtGui.QStandardItemModel(self.elec_list)
         for name in self.elec_names:
             self.elec_list_model.appendRow(QtGui.QStandardItem(name))
-        for name in self.elec_matrix:
+        for name in self.elecs:
             self.color_list_item(name=name)
         self.elec_list.setModel(self.elec_list_model)
         self.elec_list.clicked.connect(self.change_elec)
-        if self.elec_names or self.elec_matrix:
+        if self.elec_names or self.elecs:
             self.elec_list.setCurrentIndex(
                 self.elec_list_model.index(self.elec_index, 0))
         self.elec_list.keyPressEvent = self.keyPressEvent
@@ -691,7 +694,7 @@ class ElectrodePicker(QMainWindow):
         if name:
             self.elec_list.setCurrentIndex(
                 self.elec_list_model.index(self.elec_index, 0))
-        if name in self.elec_matrix:
+        if name in self.elecs:
             self.move_cursors_to_pos()
         self.update_group_color()
         self.plt.fig.canvas.draw()
@@ -778,7 +781,7 @@ class ElectrodePicker(QMainWindow):
         color = QtGui.QColor('white')
         if not clear:
             # we need the normalized color map
-            group = self.elec_matrix[name][3]
+            group = self.elecs[name][3]
             color.setRgb(*[c * 255 for c in
                            UNIQUE_COLORS[int(group) % N_COLORS]])
         brush = QtGui.QBrush(color)
@@ -821,20 +824,20 @@ class ElectrodePicker(QMainWindow):
         self.remove_elec()
         name = self.get_current_elec()
         if name:
-            self.elec_matrix[name] = \
+            self.elecs[name] = \
                 self.cursors_to_RAS().tolist() + [self.get_group(), 'n/a']
             self.color_list_item()
             self.update_elec_images(draw=True)
-            save_electrodes(self.elec_matrix)
+            save_electrodes(self.elecs)
             self.next_elec()
 
     @pyqtSlot()
     def remove_elec(self):
         name = self.get_current_elec()
-        if name in self.elec_matrix:
+        if name in self.elecs:
             self.color_list_item(clear=True)
-            self.elec_matrix.pop(name)
-            save_electrodes(self.elec_matrix)
+            self.elecs.pop(name)
+            save_electrodes(self.elecs)
             self.update_elec_images(draw=True)
 
     def update_elec_images(self, axis_selected=None, draw=False):
@@ -1150,7 +1153,7 @@ class ElectrodePicker(QMainWindow):
             The slice coordinates of the given RAS data
         """
         name = self.get_current_elec(name=name)
-        return np.array(self.elec_matrix[name][:3]) + VOXEL_SIZES // 2
+        return np.array(self.elecs[name][:3]) + VOXEL_SIZES // 2
 
     def launch_3D_viewer(self):
         """Launch 3D viewer to visualize electrodes."""

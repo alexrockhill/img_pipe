@@ -214,9 +214,9 @@ def load_electrodes(template=None, verbose=True):
     base_name = 'electrodes.tsv' if template is None else \
         f'electrodes_{template}.tsv'
     elec_fname = op.join(base_path, 'elecs', base_name)
-    elec_matrix = dict()
+    elecs = dict()
     if not op.isfile(elec_fname):
-        return elec_matrix
+        return elecs
     with open(elec_fname, 'r') as fid:
         header = fid.readline()  # for header
         assert header.rstrip().split('\t') == \
@@ -224,8 +224,8 @@ def load_electrodes(template=None, verbose=True):
         for line in fid:
             name, R, A, S, device, label = line.rstrip().split('\t')
             elec_data = np.array([R, A, S]).astype(float).tolist()
-            elec_matrix[name] = elec_data + [int(device), label]
-    return elec_matrix
+            elecs[name] = elec_data + [int(device), label]
+    return elecs
 
 
 def find_begin_end_numbers(name):
@@ -512,6 +512,31 @@ def get_vox_to_ras(inverse=False):
 def apply_trans(trans, data):
     """Use a transform to change coordinate spaces."""
     return mne.transforms.apply_trans(trans, data, move=True)
+
+
+def morph_elecs(elec_matrix, sub_brain, template_brain,
+                metric=None, level_iters=None, verbose=True):
+    """Performs the symmetric diffeomorphic registration to template space."""
+    from nipy import load_image
+    from dipy.align.metrics import CCMetric
+    from dipy.align.imwarp import SymmetricDiffeomorphicRegistration
+
+    moving = load_image(sub_brain)
+    static = load_image(template_brain)
+    # Compute registration
+    metric = CCMetric(3) if metric is None else metric
+    level_iters = [10, 10, 5] if level_iters is None else level_iters
+    sdr = SymmetricDiffeomorphicRegistration(metric, level_iters)
+    if verbose:
+        print('Optimizing symmetric diffeomorphic registration')
+    mapping = sdr.optimize(static.get_data(), moving.get_data(),
+                           static.affine, moving.affine)
+    if verbose:
+        print('Applying mapping to electrode positions')
+    for i, xyz in enumerate(elec_matrix):
+        x, y, z = np.round(xyz).astype(int)
+        elec_matrix[i] += mapping.forward[x, y, z]
+    return elec_matrix
 
 
 def aseg_to_surf(out_fname, aseg, idx, trans, sigma=1, verbose=True):

@@ -22,7 +22,7 @@ from img_pipe.config import (SUBCORTICAL_INDICES, ATLAS_DICT, VOXEL_SIZES,
 from img_pipe.utils import (check_file, make_dir, check_fs_vars,
                             get_ieeg_fnames, get_fs_labels, aseg_to_surf,
                             load_image_data, load_electrodes,
-                            save_electrodes, get_vox_to_ras)
+                            save_electrodes, get_vox_to_ras, morph_elecs)
 
 
 def check_pipeline():
@@ -389,9 +389,68 @@ def label_electrodes(atlas='desikan-killiany', picks=None,
     save_electrodes(elec_matrix, atlas=atlas, verbose=verbose)
 
 
-def warp(template='cvs_avg35_inMNI152', n_jobs=1, overwrite=False,
-         verbose=True):
-    """Warps electrodes to a common atlas.
+def warp(template='cvs_avg35_inMNI152', metric=None, level_iters=None,
+         n_jobs=1, overwrite=False, verbose=True):
+    """Warps electrodes to a common atlas using dipy's
+    symmetric diffeometric registration (SDR)
+
+    Parameters
+    ----------
+    template : str, optional
+        Which atlas brain to use. Must be one of ['V1_average',
+        'cvs_avg35', 'cvs_avg35_inMNI152', 'fsaverage',
+        'fsaverage3', 'fsaverage4', 'fsaverage5', 'fsaverage6',
+        'fsaverage_sym']
+    metric : `dipy.align.metrics` object
+        The metric used to optimize symmetric diffeomorphic registration.
+    level_iters : list
+        The number of iterations at each scale of the space. Since this is
+        3D data, the length must be 3.
+    n_jobs: int
+        The number of cores to use for parallel computing to speed up the
+        process.
+    overwrite : bool
+        Whether to overwrite the target filepath
+    verbose : bool
+        Whether to print text updating on the status of the function.
+
+    """
+    if template not in TEMPLATES:
+        raise ValueError(f'Template must be in {TEMPLATES}, got {template}')
+    if verbose:
+        print(f'Using {template} as the template for electrode warping')
+
+    base_path = check_fs_vars()
+    warped_fname = op.join(base_path, 'elecs', f'electrodes_{template}.tsv')
+    if op.isfile(warped_fname) and not overwrite:
+        raise ValueError(f'Electrodes are already warped to {template} and '
+                         'overwrite is False')
+    elecs = load_electrodes(verbose=verbose)
+    sub_brain = check_file(op.join(base_path, 'mri', 'brain.mgz'), 'recon-all')
+    template_brain = check_file(
+        op.join(os.environ['FREESURFER_HOME'], 'subjects', template,
+                'mri', 'brain.mgz'), instructions='Check freesurfer install')
+    elec_matrix = np.zeros((len(elecs), 3))
+    lookup = dict()
+    for i, name in enumerate(elecs):
+        elec_matrix[i] = np.array(elecs[name][:3]) + VOXEL_SIZES // 2
+        lookup[i] = name
+    elec_matrix = morph_elecs(elec_matrix, sub_brain, template_brain,
+                              metric=metric, level_iters=level_iters,
+                              verbose=verbose)
+    warped_elecs = dict()
+    for i, xyz in enumerate(elec_matrix):
+        warped_elecs[lookup[i]] = list(xyz - VOXEL_SIZES // 2) + \
+            elecs[lookup[i]][3:]
+    save_electrodes(warped_elecs, template=template)
+
+
+def warp_cvs(template='cvs_avg35_inMNI152', n_jobs=1, overwrite=False,
+             verbose=True):
+    """Warps electrodes to a common atlas using freesurfer's
+    `mri_cvs_register`.
+
+    ..note : This takes approximately 15 hours to compute per subject.
 
     Parameters
     ----------
@@ -419,35 +478,32 @@ def warp(template='cvs_avg35_inMNI152', n_jobs=1, overwrite=False,
     if op.isfile(warped_fname) and not overwrite:
         raise ValueError(f'Electrodes are already warped to {template} and '
                          'overwrite is False')
-    check_file(
-        op.join(base_path, 'cvs', f'final_CVSmorphed_to{template}_aseg.mgz'),
-        instructions='Run `mri_cvs_register` to create it')
+    template_brain = check_file(
+        op.join(os.environ['FREESURFER_HOME'], 'subjects', template,
+                'mri', 'brain.mgz'), instructions='Check freesurfer install')
     morph_fname = check_file(
         op.join(base_path, 'cvs',
                 f'combined_to{template}_elreg_afteraseg-norm.tm3d'),
         instructions='Check `mri_cvs_register` for errors and '
         'make sure to use the flag --nocleanup')
-    template_fname = check_file(
-        op.join(os.environ['FREESURFER_HOME'], 'subjects', template,
-                'mri', 'brain.mgz'), instructions='Check freesurfer install')
-    elec_matrix = load_electrodes(verbose=verbose)
+    elecs = load_electrodes(verbose=verbose)
     tmp_fname = op.join(base_path, 'cvs', 'tmp.txt')
     with open(tmp_fname, 'w') as fid:
-        for name in elec_matrix:
-            r, a, s = elec_matrix[name][:3]
+        for name in elecs:
+            r, a, s = elecs[name][:3]
             vx, vy, vz = np.array([r, a, s]) + VOXEL_SIZES // 2
             fid.write(f'{vx}\t{vy}\t{vz}\n')
     out_fname = op.join(base_path, 'cvs', 'out.txt')
-    run(f'applyMorph --template {template_fname} '
+    run(f'applyMorph --template {template_brain} '
         f'--transform {morph_fname} '
         f'tract_point_list {tmp_fname} {out_fname} nearest', shell=True)
-    warped_elec_matrix = dict()
+    warped_elecs = dict()
     with open(out_fname, 'r') as fid:
-        for name in elec_matrix:
+        for name in elecs:
             vx, vy, vz = [float(p) for p in
                           fid.readline().rstrip().split()]
             r, a, s = np.array([vx, vy, vz]) - VOXEL_SIZES // 2
-            warped_elec_matrix[name] = [r, a, s] + elec_matrix[name][3:]
-    save_electrodes(warped_elec_matrix, template=template)
+            warped_elecs[name] = [r, a, s] + elecs[name][3:]
+    save_electrodes(warped_elecs, template=template)
     os.remove(tmp_fname)
     os.remove(out_fname)

@@ -97,7 +97,7 @@ class ROI:
                                             'subjects', template, 'label',
                                             atlas), 'img_pipe.warp')
             if name not in os.listdir(roi_dir):
-                print(f'WARNING: Name {name} not recongized')
+                raise ValueError(f'Name {name} not recongized')
             # change number label to name
             if isinstance(name, int):
                 name = number_dict[name]
@@ -114,7 +114,7 @@ class ROI:
 
 
 def get_rois(group='all', template=None, opacity=1.0,
-             representation='surface'):
+             representation='surface', on_error='warn'):
     """Get the subcortial regions of interest
 
     Parameters
@@ -132,17 +132,33 @@ def get_rois(group='all', template=None, opacity=1.0,
         The opacity of the mesh, between 0.0 and 1.0.
     rep: str
         The representation type of the 3D mesh; 'surface' or 'wireframe'.
+    on_error: str
+        What to do when one of the ROIs failed to be labeled,
+        usually because it's too small. Can be 'raise' or 'warn'.
     """
     if group in ('all', 'pial', 'inflated', 'white'):
         name = 'Pial' if group == 'all' else group.capitalize()
-        cortex = [ROI(f'{hemi}-{name}', opacity=opacity,
-                      representation=representation, template=template)
-                  for hemi in ('Left', 'Right')]
+        cortex = list()
+        for hemi in ('Left', 'Right'):
+            try:
+                cortex.append(ROI(
+                    f'{hemi}-{name}', opacity=opacity,
+                    representation=representation, template=template))
+            except Exception as e:
+                if on_error == 'raise':
+                    raise e
+                print(e)
     if group in ('all', 'subcortical'):
-        subcortical = \
-            [ROI(idx, opacity=opacity, representation=representation,
-                 template=template)
-             for idx in SUBCORTICAL_INDICES]
+        subcortical = list()
+        for idx in SUBCORTICAL_INDICES:
+            try:
+                subcortical.append(ROI(
+                    idx, opacity=opacity, representation=representation,
+                    template=template))
+            except Exception as e:
+                if on_error == 'raise':
+                    raise e
+                print(e)
     if group == 'all':
         return cortex + subcortical
     elif group == 'subcortical':

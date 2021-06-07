@@ -68,7 +68,8 @@ class ROI:
         representation : {'surface', 'wireframe'}
         gaussian : bool
         """
-        base_path = check_fs_vars()
+        if template is None:
+            base_path = check_fs_vars()
         number_dict = get_fs_labels()
         color_dict = get_fs_colors()
 
@@ -96,7 +97,7 @@ class ROI:
                                             'subjects', template, 'label',
                                             atlas), 'img_pipe.warp')
             if name not in os.listdir(roi_dir):
-                raise ValueError(f'Name {name} not recongized')
+                print(f'WARNING: Name {name} not recongized')
             # change number label to name
             if isinstance(name, int):
                 name = number_dict[name]

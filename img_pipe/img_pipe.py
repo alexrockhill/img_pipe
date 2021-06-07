@@ -208,7 +208,7 @@ def label(atlas=None, sigma=1, overwrite=False, verbose=True):
     vox_to_ras, _ = get_vox_to_ras()
     # make gyri labels
     for atlas, seg in atlas_dict.items():
-        aseg = load_image_data('mri', f'{seg}+aseg.mgz', 'img_pipe.recon')
+        aseg = load_image_data('mri', f'{seg}+aseg.mgz', 'recon-all')
         roi_idxs = np.unique(aseg[aseg > 0]).astype(int)  # > 0 == no unknown
         assert all([idx in roi_idxs for idx in SUBCORTICAL_INDICES])
         if verbose:
